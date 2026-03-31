@@ -136,12 +136,12 @@ AS
             WHEN 'CA' THEN 'BN'
             WHEN 'MX' THEN 'RFC'
             -- United Kingdom & Ireland
-            WHEN 'GB' THEN 'UTR'
+            WHEN 'GB' THEN 'VAT'
             WHEN 'IE' THEN 'PPS'
             -- EU member states -> VAT
-            WHEN 'DE' THEN 'VAT'
-            WHEN 'FR' THEN 'VAT'
-            WHEN 'IT' THEN 'VAT'
+            WHEN 'DE' THEN 'UST'
+            WHEN 'FR' THEN 'TVA'
+            WHEN 'IT' THEN 'PARTITAIVA'
             WHEN 'ES' THEN 'VAT'
             WHEN 'NL' THEN 'VAT'
             WHEN 'BE' THEN 'VAT'
@@ -169,7 +169,7 @@ AS
             -- Asia-Pacific
             WHEN 'AU' THEN 'ABN'
             WHEN 'NZ' THEN 'IRD'
-            WHEN 'IN' THEN 'PAN'
+            WHEN 'IN' THEN 'GSTIN'
             WHEN 'JP' THEN 'CN'
             WHEN 'KR' THEN 'BRN'
             WHEN 'SG' THEN 'UEN'
@@ -497,6 +497,8 @@ AS
                             p_business_entity_type  => p_business_entity_type,
                             p_bank_account_holder   => p_bank_account_holder,
                             p_account_number        => p_account_number,
+                            p_business_name         => p_company_name,
+                            p_tax_id_number         => p_tax_number,
                             p_iban                  => p_iban,
                             p_bank_code             => p_bank_code,
                             p_swift_code            => p_swift_code

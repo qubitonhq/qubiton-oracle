@@ -473,6 +473,7 @@ AS
                          + EXTRACT(SECOND FROM (SYSTIMESTAMP - l_start_ts))) * 1000;
             log_call(p_method_name, p_path, 429, l_elapsed_ms, 'rate limit exceeded');
             IF DBMS_LOB.ISTEMPORARY(l_body) = 1 THEN DBMS_LOB.FREETEMPORARY(l_body); END IF;
+            BEGIN UTL_HTTP.END_RESPONSE(l_resp); EXCEPTION WHEN OTHERS THEN NULL; END;
             handle_error(gc_err_rate_limited, p_method_name || ': rate limit exceeded', gv_error_mode);
             RETURN NULL;
         WHEN UTL_HTTP.REQUEST_FAILED THEN
@@ -481,6 +482,7 @@ AS
                          + EXTRACT(SECOND FROM (SYSTIMESTAMP - l_start_ts))) * 1000;
             log_call(p_method_name, p_path, NULL, l_elapsed_ms, SQLERRM);
             IF l_body IS NOT NULL AND DBMS_LOB.ISTEMPORARY(l_body) = 1 THEN DBMS_LOB.FREETEMPORARY(l_body); END IF;
+            BEGIN UTL_HTTP.END_RESPONSE(l_resp); EXCEPTION WHEN OTHERS THEN NULL; END;
             handle_error(gc_err_http_request, p_method_name || ': request failed: ' || SQLERRM, gv_error_mode);
             RETURN NULL;
         WHEN OTHERS THEN
@@ -489,12 +491,7 @@ AS
                          + EXTRACT(SECOND FROM (SYSTIMESTAMP - l_start_ts))) * 1000;
             log_call(p_method_name, p_path, NULL, l_elapsed_ms, SQLERRM);
             IF l_body IS NOT NULL AND DBMS_LOB.ISTEMPORARY(l_body) = 1 THEN DBMS_LOB.FREETEMPORARY(l_body); END IF;
-            -- Ensure response is closed on unexpected errors
-            BEGIN
-                UTL_HTTP.END_RESPONSE(l_resp);
-            EXCEPTION
-                WHEN OTHERS THEN NULL;
-            END;
+            BEGIN UTL_HTTP.END_RESPONSE(l_resp); EXCEPTION WHEN OTHERS THEN NULL; END;
             RAISE;
     END http_post;
 
@@ -601,6 +598,7 @@ AS
                          + EXTRACT(SECOND FROM (SYSTIMESTAMP - l_start_ts))) * 1000;
             log_call(p_method_name, p_path, 429, l_elapsed_ms, 'rate limit exceeded', 'GET');
             IF DBMS_LOB.ISTEMPORARY(l_body) = 1 THEN DBMS_LOB.FREETEMPORARY(l_body); END IF;
+            BEGIN UTL_HTTP.END_RESPONSE(l_resp); EXCEPTION WHEN OTHERS THEN NULL; END;
             handle_error(gc_err_rate_limited, p_method_name || ': rate limit exceeded', gv_error_mode);
             RETURN NULL;
         WHEN UTL_HTTP.REQUEST_FAILED THEN
@@ -609,6 +607,7 @@ AS
                          + EXTRACT(SECOND FROM (SYSTIMESTAMP - l_start_ts))) * 1000;
             log_call(p_method_name, p_path, NULL, l_elapsed_ms, SQLERRM, 'GET');
             IF l_body IS NOT NULL AND DBMS_LOB.ISTEMPORARY(l_body) = 1 THEN DBMS_LOB.FREETEMPORARY(l_body); END IF;
+            BEGIN UTL_HTTP.END_RESPONSE(l_resp); EXCEPTION WHEN OTHERS THEN NULL; END;
             handle_error(gc_err_http_request, p_method_name || ': request failed: ' || SQLERRM, gv_error_mode);
             RETURN NULL;
         WHEN OTHERS THEN
@@ -617,11 +616,7 @@ AS
                          + EXTRACT(SECOND FROM (SYSTIMESTAMP - l_start_ts))) * 1000;
             log_call(p_method_name, p_path, NULL, l_elapsed_ms, SQLERRM, 'GET');
             IF l_body IS NOT NULL AND DBMS_LOB.ISTEMPORARY(l_body) = 1 THEN DBMS_LOB.FREETEMPORARY(l_body); END IF;
-            BEGIN
-                UTL_HTTP.END_RESPONSE(l_resp);
-            EXCEPTION
-                WHEN OTHERS THEN NULL;
-            END;
+            BEGIN UTL_HTTP.END_RESPONSE(l_resp); EXCEPTION WHEN OTHERS THEN NULL; END;
             RAISE;
     END http_get;
 
