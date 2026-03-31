@@ -1160,7 +1160,7 @@ AS
         json_add(lv_body, lv_sep, 'firstName',  p_first_name);
         json_add(lv_body, lv_sep, 'lastName',   p_last_name);
         json_add(lv_body, lv_sep, 'country',    p_country);
-        json_add(lv_body, lv_sep, 'middlename', p_middle_name);
+        json_add(lv_body, lv_sep, 'middleName', p_middle_name);
         lv_body := lv_body || '}';
 
         RETURN http_post('/api/disqualifieddirectors/validate', lv_body, 'check_directors');
