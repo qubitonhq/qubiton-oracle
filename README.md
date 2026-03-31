@@ -304,6 +304,19 @@ qubiton-oracle/
   README.md                    -- This file
 ```
 
+## Other Integrations
+
+QubitOn provides native connectors and SDKs for other platforms:
+
+| Connector | Platform | Language | Repo |
+|-----------|----------|----------|------|
+| **Go SDK** | Any platform | Go | [qubiton-go](https://github.com/qubitonhq/qubiton-go) |
+| **SAP S/4HANA** | SAP ECC, S/4HANA, BTP | ABAP | [qubiton-sap](https://github.com/qubitonhq/qubiton-sap) |
+| **NetSuite** | All NetSuite editions | SuiteScript 2.1 | [qubiton-netsuite](https://github.com/qubitonhq/qubiton-netsuite) |
+| **QuickBooks Online** | QuickBooks Online | TypeScript | [qubiton-quickbooks](https://github.com/qubitonhq/qubiton-quickbooks) |
+
+Plus 30+ pre-built integrations for Salesforce, HubSpot, Snowflake, Databricks, Zapier, Make, and more at [www.qubiton.com/integrations](https://www.qubiton.com/integrations).
+
 ## License
 
 MIT License. Copyright (c) 2026 [apexanalytix, Inc.](https://www.apexanalytix.com)
