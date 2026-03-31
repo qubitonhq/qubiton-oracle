@@ -418,12 +418,16 @@ AS
         EXCEPTION
             WHEN UTL_HTTP.END_OF_BODY THEN
                 NULL;
+            WHEN OTHERS THEN
+                BEGIN UTL_HTTP.END_RESPONSE(l_resp); EXCEPTION WHEN OTHERS THEN NULL; END;
+                RAISE;
         END;
 
         UTL_HTTP.END_RESPONSE(l_resp);
 
         -- Calculate elapsed time
-        l_elapsed_ms := (EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
+        l_elapsed_ms := (EXTRACT(HOUR FROM (SYSTIMESTAMP - l_start_ts)) * 3600
+                         + EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
                          + EXTRACT(SECOND FROM (SYSTIMESTAMP - l_start_ts))) * 1000;
 
         -- Log the call
@@ -464,21 +468,24 @@ AS
 
     EXCEPTION
         WHEN UTL_HTTP.TOO_MANY_REQUESTS THEN
-            l_elapsed_ms := (EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
+            l_elapsed_ms := (EXTRACT(HOUR FROM (SYSTIMESTAMP - l_start_ts)) * 3600
+                         + EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
                          + EXTRACT(SECOND FROM (SYSTIMESTAMP - l_start_ts))) * 1000;
             log_call(p_method_name, p_path, 429, l_elapsed_ms, 'rate limit exceeded');
             IF DBMS_LOB.ISTEMPORARY(l_body) = 1 THEN DBMS_LOB.FREETEMPORARY(l_body); END IF;
             handle_error(gc_err_rate_limited, p_method_name || ': rate limit exceeded', gv_error_mode);
             RETURN NULL;
         WHEN UTL_HTTP.REQUEST_FAILED THEN
-            l_elapsed_ms := (EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
+            l_elapsed_ms := (EXTRACT(HOUR FROM (SYSTIMESTAMP - l_start_ts)) * 3600
+                         + EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
                          + EXTRACT(SECOND FROM (SYSTIMESTAMP - l_start_ts))) * 1000;
             log_call(p_method_name, p_path, NULL, l_elapsed_ms, SQLERRM);
             IF l_body IS NOT NULL AND DBMS_LOB.ISTEMPORARY(l_body) = 1 THEN DBMS_LOB.FREETEMPORARY(l_body); END IF;
             handle_error(gc_err_http_request, p_method_name || ': request failed: ' || SQLERRM, gv_error_mode);
             RETURN NULL;
         WHEN OTHERS THEN
-            l_elapsed_ms := (EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
+            l_elapsed_ms := (EXTRACT(HOUR FROM (SYSTIMESTAMP - l_start_ts)) * 3600
+                         + EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
                          + EXTRACT(SECOND FROM (SYSTIMESTAMP - l_start_ts))) * 1000;
             log_call(p_method_name, p_path, NULL, l_elapsed_ms, SQLERRM);
             IF l_body IS NOT NULL AND DBMS_LOB.ISTEMPORARY(l_body) = 1 THEN DBMS_LOB.FREETEMPORARY(l_body); END IF;
@@ -547,12 +554,16 @@ AS
         EXCEPTION
             WHEN UTL_HTTP.END_OF_BODY THEN
                 NULL;
+            WHEN OTHERS THEN
+                BEGIN UTL_HTTP.END_RESPONSE(l_resp); EXCEPTION WHEN OTHERS THEN NULL; END;
+                RAISE;
         END;
 
         UTL_HTTP.END_RESPONSE(l_resp);
 
         -- Calculate elapsed time
-        l_elapsed_ms := (EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
+        l_elapsed_ms := (EXTRACT(HOUR FROM (SYSTIMESTAMP - l_start_ts)) * 3600
+                         + EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
                          + EXTRACT(SECOND FROM (SYSTIMESTAMP - l_start_ts))) * 1000;
 
         -- Log the call
@@ -585,21 +596,24 @@ AS
 
     EXCEPTION
         WHEN UTL_HTTP.TOO_MANY_REQUESTS THEN
-            l_elapsed_ms := (EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
+            l_elapsed_ms := (EXTRACT(HOUR FROM (SYSTIMESTAMP - l_start_ts)) * 3600
+                         + EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
                          + EXTRACT(SECOND FROM (SYSTIMESTAMP - l_start_ts))) * 1000;
             log_call(p_method_name, p_path, 429, l_elapsed_ms, 'rate limit exceeded', 'GET');
             IF DBMS_LOB.ISTEMPORARY(l_body) = 1 THEN DBMS_LOB.FREETEMPORARY(l_body); END IF;
             handle_error(gc_err_rate_limited, p_method_name || ': rate limit exceeded', gv_error_mode);
             RETURN NULL;
         WHEN UTL_HTTP.REQUEST_FAILED THEN
-            l_elapsed_ms := (EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
+            l_elapsed_ms := (EXTRACT(HOUR FROM (SYSTIMESTAMP - l_start_ts)) * 3600
+                         + EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
                          + EXTRACT(SECOND FROM (SYSTIMESTAMP - l_start_ts))) * 1000;
             log_call(p_method_name, p_path, NULL, l_elapsed_ms, SQLERRM, 'GET');
             IF l_body IS NOT NULL AND DBMS_LOB.ISTEMPORARY(l_body) = 1 THEN DBMS_LOB.FREETEMPORARY(l_body); END IF;
             handle_error(gc_err_http_request, p_method_name || ': request failed: ' || SQLERRM, gv_error_mode);
             RETURN NULL;
         WHEN OTHERS THEN
-            l_elapsed_ms := (EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
+            l_elapsed_ms := (EXTRACT(HOUR FROM (SYSTIMESTAMP - l_start_ts)) * 3600
+                         + EXTRACT(MINUTE FROM (SYSTIMESTAMP - l_start_ts)) * 60
                          + EXTRACT(SECOND FROM (SYSTIMESTAMP - l_start_ts))) * 1000;
             log_call(p_method_name, p_path, NULL, l_elapsed_ms, SQLERRM, 'GET');
             IF l_body IS NOT NULL AND DBMS_LOB.ISTEMPORARY(l_body) = 1 THEN DBMS_LOB.FREETEMPORARY(l_body); END IF;
@@ -1358,7 +1372,7 @@ AS
 
         lv_body := '{';
         json_add(lv_body, lv_sep, 'companyName',            p_company_name);
-        json_add(lv_body, lv_sep, 'countryOfIncorporation', p_country_of_incorporation);
+        json_add(lv_body, lv_sep, 'CountryOfIncorporation', p_country_of_incorporation);
         json_add(lv_body, lv_sep, 'category',               p_category);
         json_add(lv_body, lv_sep, 'url',                    p_url);
         json_add(lv_body, lv_sep, 'businessEntityType',     p_business_entity_type);

@@ -485,7 +485,8 @@ AS
             p_module_name  => gc_module_ipro,
             p_vendor_id    => l_req.vendor_id,
             p_vendor_name  => l_req.vendor_name,
-            p_country      => l_req.vendor_country
+            p_country      => l_req.vendor_country,
+            p_company_name => l_req.vendor_name
         );
 
         RETURN l_ok;

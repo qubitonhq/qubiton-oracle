@@ -48,20 +48,20 @@ EXCEPTION WHEN OTHERS THEN
 END;
 /
 
-BEGIN
-    EXECUTE IMMEDIATE 'DROP PACKAGE qubiton_types';
-    DBMS_OUTPUT.PUT_LINE('  Dropped QUBITON_TYPES');
-EXCEPTION WHEN OTHERS THEN
-    DBMS_OUTPUT.PUT_LINE('  QUBITON_TYPES not found (skipped)');
-END;
-/
-
--- Drop test package
+-- Drop test package (depends on types, api_pkg, validate_pkg)
 BEGIN
     EXECUTE IMMEDIATE 'DROP PACKAGE qubiton_test_pkg';
     DBMS_OUTPUT.PUT_LINE('  Dropped QUBITON_TEST_PKG');
 EXCEPTION WHEN OTHERS THEN
     DBMS_OUTPUT.PUT_LINE('  QUBITON_TEST_PKG not found (skipped)');
+END;
+/
+
+BEGIN
+    EXECUTE IMMEDIATE 'DROP PACKAGE qubiton_types';
+    DBMS_OUTPUT.PUT_LINE('  Dropped QUBITON_TYPES');
+EXCEPTION WHEN OTHERS THEN
+    DBMS_OUTPUT.PUT_LINE('  QUBITON_TYPES not found (skipped)');
 END;
 /
 
