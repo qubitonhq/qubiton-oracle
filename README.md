@@ -66,14 +66,14 @@ The connector is organized in three layers:
 | # | Method | API Endpoint | Description |
 |---|--------|-------------|-------------|
 | 2 | `validate_tax` | `POST /api/tax/validate` | Validate tax ID against government registries |
-| 3 | `validate_tax_format` | `POST /api/tax/validate/format` | Validate tax ID format only |
+| 3 | `validate_tax_format` | `POST /api/tax/format-validate` | Validate tax ID format only |
 
 ### Bank (2)
 
 | # | Method | API Endpoint | Description |
 |---|--------|-------------|-------------|
-| 4 | `validate_bank_account` | `POST /api/bank/validate` | Validate bank account (routing, IBAN, SWIFT) |
-| 5 | `validate_bank_pro` | `POST /api/bank/validate/pro` | Enhanced bank validation with account name matching |
+| 4 | `validate_bank_account` | `POST /api/bankaccount/validate` | Validate bank account (routing, IBAN, SWIFT) |
+| 5 | `validate_bank_pro` | `POST /api/bankaccount/pro/validate` | Enhanced bank validation with account name matching |
 
 ### Email and Phone (2)
 
@@ -106,51 +106,51 @@ The connector is organized in three layers:
 
 | # | Method | API Endpoint | Description |
 |---|--------|-------------|-------------|
-| 13 | `check_epa_prosecution` | `POST /api/epa/prosecution/validate` | EPA enforcement action check |
-| 14 | `lookup_epa_prosecution` | `POST /api/epa/prosecution/lookup` | Detailed EPA prosecution records |
+| 13 | `check_epa_prosecution` | `POST /api/criminalprosecution/validate` | EPA enforcement action check |
+| 14 | `lookup_epa_prosecution` | `POST /api/criminalprosecution/lookup` | Detailed EPA prosecution records |
 
 ### Healthcare (2)
 
 | # | Method | API Endpoint | Description |
 |---|--------|-------------|-------------|
-| 15 | `check_healthcare_exclusion` | `POST /api/healthcare/exclusion/validate` | Healthcare exclusion list check |
-| 16 | `lookup_healthcare_exclusion` | `POST /api/healthcare/exclusion/lookup` | Detailed healthcare exclusion records |
+| 15 | `check_healthcare_exclusion` | `POST /api/providerexclusion/validate` | Healthcare exclusion list check |
+| 16 | `lookup_healthcare_exclusion` | `POST /api/providerexclusion/lookup` | Detailed healthcare exclusion records |
 
 ### Risk and Financial (5)
 
 | # | Method | API Endpoint | Description |
 |---|--------|-------------|-------------|
-| 17 | `check_bankruptcy_risk` | `POST /api/bankruptcy/validate` | Bankruptcy filing check |
-| 18 | `lookup_credit_score` | `POST /api/credit/score/lookup` | Company credit score |
-| 19 | `lookup_fail_rate` | `POST /api/credit/failrate/lookup` | Payment failure rate data |
-| 20 | `assess_entity_risk` | `POST /api/risk/assess` | Comprehensive entity risk assessment |
-| 21 | `lookup_credit_analysis` | `POST /api/credit/analysis/lookup` | Detailed credit analysis report |
+| 17 | `check_bankruptcy_risk` | `POST /api/risk/lookup` | Bankruptcy filing check |
+| 18 | `lookup_credit_score` | `POST /api/risk/lookup` | Company credit score |
+| 19 | `lookup_fail_rate` | `POST /api/risk/lookup` | Payment failure rate data |
+| 20 | `assess_entity_risk` | `POST /api/entity/fraud/lookup` | Comprehensive entity risk assessment |
+| 21 | `lookup_credit_analysis` | `POST /api/creditanalysis/lookup` | Detailed credit analysis report |
 
 ### ESG and Cybersecurity (3)
 
 | # | Method | API Endpoint | Description |
 |---|--------|-------------|-------------|
-| 22 | `lookup_esg_score` | `POST /api/esg/score/lookup` | ESG score lookup |
-| 23 | `domain_security_report` | `POST /api/security/domain/report` | Domain cybersecurity report |
-| 24 | `check_ip_quality` | `POST /api/security/ip/quality` | IP address reputation check |
+| 22 | `lookup_esg_score` | `POST /api/esg/Scores` | ESG score lookup |
+| 23 | `domain_security_report` | `POST /api/itsecurity/domainreport` | Domain cybersecurity report |
+| 24 | `check_ip_quality` | `POST /api/ipquality/validate` | IP address reputation check |
 
 ### Corporate Structure (4)
 
 | # | Method | API Endpoint | Description |
 |---|--------|-------------|-------------|
-| 25 | `lookup_beneficial_ownership` | `POST /api/corporate/beneficialownership/lookup` | Beneficial ownership information |
-| 26 | `lookup_corporate_hierarchy` | `POST /api/corporate/hierarchy/lookup` | Corporate parent/subsidiary structure |
-| 27 | `lookup_duns` | `POST /api/corporate/duns/lookup` | D-U-N-S number lookup |
-| 28 | `lookup_hierarchy` | `POST /api/corporate/hierarchy/tree` | Corporate hierarchy tree |
+| 25 | `lookup_beneficial_ownership` | `POST /api/beneficialownership/lookup` | Beneficial ownership information |
+| 26 | `lookup_corporate_hierarchy` | `POST /api/corporatehierarchy/lookup` | Corporate parent/subsidiary structure |
+| 27 | `lookup_duns` | `POST /api/duns-number-lookup` | D-U-N-S number lookup |
+| 28 | `lookup_hierarchy` | `POST /api/company/hierarchy/lookup` | Corporate hierarchy tree |
 
 ### Industry (4)
 
 | # | Method | API Endpoint | Description |
 |---|--------|-------------|-------------|
-| 29 | `validate_npi` | `POST /api/npi/validate` | National Provider Identifier validation |
+| 29 | `validate_npi` | `POST /api/nationalprovideridentifier/validate` | National Provider Identifier validation |
 | 30 | `validate_medpass` | `POST /api/medpass/validate` | MedPASS database validation |
-| 31 | `lookup_dot_carrier` | `POST /api/dot/carrier/lookup` | DOT motor carrier lookup |
-| 32 | `validate_india_identity` | `POST /api/identity/india/validate` | Indian ID validation (PAN, Aadhaar, GSTIN) |
+| 31 | `lookup_dot_carrier` | `POST /api/dot/fmcsa/lookup` | DOT motor carrier lookup |
+| 32 | `validate_india_identity` | `POST /api/inidentity/validate` | Indian ID validation (PAN, Aadhaar, GSTIN) |
 
 ### Certification (2)
 
@@ -163,33 +163,33 @@ The connector is organized in three layers:
 
 | # | Method | API Endpoint | Description |
 |---|--------|-------------|-------------|
-| 35 | `lookup_business_classification` | `POST /api/classification/lookup` | SIC/NAICS/UNSPSC classification lookup |
+| 35 | `lookup_business_classification` | `POST /api/businessclassification/lookup` | SIC/NAICS/UNSPSC classification lookup |
 
 ### Financial Ops (2)
 
 | # | Method | API Endpoint | Description |
 |---|--------|-------------|-------------|
-| 36 | `analyze_payment_terms` | `POST /api/payment/terms/analyze` | Payment terms analysis |
-| 37 | `lookup_exchange_rates` | `POST /api/exchange/rates/lookup` | Currency exchange rates |
+| 36 | `analyze_payment_terms` | `POST /api/paymentterms/validate` | Payment terms analysis |
+| 37 | `lookup_exchange_rates` | `POST /api/currency/exchange-rates/{baseCurrency}` | Currency exchange rates |
 
 ### Supplier (2)
 
 | # | Method | API Endpoint | Description |
 |---|--------|-------------|-------------|
-| 38 | `lookup_ariba_supplier` | `POST /api/ariba/supplier/lookup` | SAP Business Network supplier search |
-| 39 | `validate_ariba_supplier` | `POST /api/ariba/supplier/validate` | SAP Business Network ID validation |
+| 38 | `lookup_ariba_supplier` | `POST /api/aribasupplierprofile/lookup` | SAP Business Network supplier search |
+| 39 | `validate_ariba_supplier` | `POST /api/aribasupplierprofile/validate` | SAP Business Network ID validation |
 
 ### Gender (1)
 
 | # | Method | API Endpoint | Description |
 |---|--------|-------------|-------------|
-| 40 | `identify_gender` | `POST /api/gender/identify` | Gender identification from name |
+| 40 | `identify_gender` | `POST /api/genderize/identifygender` | Gender identification from name |
 
 ### Reference (2)
 
 | # | Method | API Endpoint | Description |
 |---|--------|-------------|-------------|
-| 41 | `get_supported_tax_formats` | `GET /api/tax/formats` | Supported tax ID formats by country |
+| 41 | `get_supported_tax_formats` | `GET /api/tax/format-validate/countries` | Supported tax ID formats by country |
 | 42 | `get_peppol_schemes` | `GET /api/peppol/schemes` | Supported Peppol scheme identifiers |
 
 ## Platform Compatibility
