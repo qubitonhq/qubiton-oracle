@@ -29,9 +29,14 @@ AS
     -- Validate AP supplier on create/update.
     -- p_calling_mode: 'TRIGGER' (from DB trigger), 'FORM' (from Forms),
     --                 'API' (from PL/SQL API), 'CONCURRENT' (from batch)
+    -- p_module_name : optional override for QUBITON_VALIDATION_CFG lookup.
+    --                 Defaults to 'AP_SUPPLIERS'.  Transactional callers
+    --                 (PO / AP_INVOICE / AP_PAYMENT) pass their own module
+    --                 so admins can tune fail-mode per document type.
     FUNCTION validate_ap_supplier (
         p_vendor_id    NUMBER,
-        p_calling_mode VARCHAR2 DEFAULT 'TRIGGER'
+        p_calling_mode VARCHAR2 DEFAULT 'TRIGGER',
+        p_module_name  VARCHAR2 DEFAULT NULL
     ) RETURN BOOLEAN;
 
     -- Validate AR customer on create/update.
@@ -83,7 +88,7 @@ AS
     -- These run when a transactional document is saved/submitted, NOT just
     -- when the master record is created.  Re-validates the supplier on the
     -- document because risk posture changes constantly (sanctions lists,
-    -- cyber score, beneficial-owner changes).
+    -- beneficial-owner changes, address moves).
     --
     -- ── On / off control (two layers, no schema changes needed):
     --
@@ -103,8 +108,8 @@ AS
     --        'AP_PAY_BATCH' — payment instruction filtering (F110-equiv)
     --
     --      ACTIVE = 'N' on a row disables just that one check on just
-    --      that one module — admin can flip cyber off on PO save while
-    --      keeping sanctions on, etc.
+    --      that one module — admin can flip TAX off on AP_INVOICE while
+    --      keeping SANCTION on, etc.
     ---------------------------------------------------------------------------
 
     -- Master on/off check.  Reads QUBITON_CONFIG.TXN_VALIDATION_ENABLED.

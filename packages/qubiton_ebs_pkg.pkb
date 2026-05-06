@@ -343,13 +343,21 @@ AS
     ---------------------------------------------------------------------------
     FUNCTION validate_ap_supplier (
         p_vendor_id    NUMBER,
-        p_calling_mode VARCHAR2 DEFAULT 'TRIGGER'
+        p_calling_mode VARCHAR2 DEFAULT 'TRIGGER',
+        p_module_name  VARCHAR2 DEFAULT NULL
     ) RETURN BOOLEAN
     IS
         l_sup      t_supplier_rec;
         l_ok       BOOLEAN;
         l_tax_type VARCHAR2(30);
+        l_module   VARCHAR2(30);
     BEGIN
+        -- Resolve effective module name.  Transactional callers pass
+        -- 'PO' / 'AP_INVOICE' / 'AP_PAYMENT' / 'AP_PAY_BATCH' so the
+        -- per-document fail-mode rules in QUBITON_VALIDATION_CFG apply.
+        -- Master-data callers leave it NULL and fall back to AP_SUPPLIERS.
+        l_module := NVL(p_module_name, gc_module_ap);
+
         -- Fetch supplier data from EBS tables
         BEGIN
             l_sup := fetch_supplier(p_vendor_id);
@@ -366,10 +374,10 @@ AS
         -- Determine tax type from country for the tax validation
         l_tax_type := qubiton_validate_pkg.determine_tax_type(l_sup.country);
 
-        -- Run all active validations for AP_SUPPLIERS module
+        -- Run all active validations for the resolved module
         -- Maps fetched EBS fields to the new validate_pkg parameter names
         l_ok := qubiton_validate_pkg.validate_supplier_all(
-            p_module_name          => gc_module_ap,
+            p_module_name          => l_module,
             p_vendor_id            => l_sup.vendor_id,
             p_vendor_name          => l_sup.vendor_name,
             p_country              => l_sup.country,
@@ -831,13 +839,16 @@ AS
             RETURN TRUE;
         END IF;
 
-        -- Re-screen the supplier on the PO for sanctions / cyber.  The 'PO'
-        -- module name keys QUBITON_VALIDATION_CFG rows specific to this hook.
-        qubiton_validate_pkg.init(p_error_mode => 'S');
+        -- Re-screen the supplier on the PO for sanctions and any other
+        -- val_types active under module='PO' in QUBITON_VALIDATION_CFG.
+        -- The orchestrator honours the per-row on_invalid / on_error rules
+        -- (e.g. block on sanctions, warn-allow on API outage) so we do
+        -- NOT call init() here — overriding the global error mode would
+        -- defeat the per-module policy seeded in setup/seed_config.sql.
         l_ok := validate_ap_supplier(
                     p_vendor_id    => l_vendor_id,
-                    p_calling_mode => p_calling_mode);
-        qubiton_validate_pkg.init(p_error_mode => NULL);
+                    p_calling_mode => p_calling_mode,
+                    p_module_name  => 'PO');
 
         IF NOT l_ok THEN
             fnd_log('validate_po_header: BLOCKED PO ' || p_po_header_id ||
@@ -847,7 +858,6 @@ AS
         RETURN l_ok;
     EXCEPTION
         WHEN OTHERS THEN
-            qubiton_validate_pkg.init(p_error_mode => NULL);
             fnd_log('validate_po_header: error for PO ' || p_po_header_id ||
                     ': ' || SQLERRM);
             -- Fail open: when the QubitOn API is down, allow PO save
@@ -885,11 +895,10 @@ AS
 
         IF l_vendor_id IS NULL THEN RETURN TRUE; END IF;
 
-        qubiton_validate_pkg.init(p_error_mode => 'S');
         l_ok := validate_ap_supplier(
                     p_vendor_id    => l_vendor_id,
-                    p_calling_mode => p_calling_mode);
-        qubiton_validate_pkg.init(p_error_mode => NULL);
+                    p_calling_mode => p_calling_mode,
+                    p_module_name  => 'AP_INVOICE');
 
         IF NOT l_ok THEN
             fnd_log('validate_ap_invoice: BLOCKED invoice ' || p_invoice_id ||
@@ -898,7 +907,6 @@ AS
         RETURN l_ok;
     EXCEPTION
         WHEN OTHERS THEN
-            qubiton_validate_pkg.init(p_error_mode => NULL);
             fnd_log('validate_ap_invoice: error for invoice ' || p_invoice_id ||
                     ': ' || SQLERRM);
             RETURN TRUE;   -- fail open
@@ -933,11 +941,10 @@ AS
 
         IF l_vendor_id IS NULL THEN RETURN TRUE; END IF;
 
-        qubiton_validate_pkg.init(p_error_mode => 'S');
         l_ok := validate_ap_supplier(
                     p_vendor_id    => l_vendor_id,
-                    p_calling_mode => p_calling_mode);
-        qubiton_validate_pkg.init(p_error_mode => NULL);
+                    p_calling_mode => p_calling_mode,
+                    p_module_name  => 'AP_PAYMENT');
 
         IF NOT l_ok THEN
             fnd_log('validate_ap_payment: BLOCKED check ' || p_check_id ||
@@ -946,12 +953,13 @@ AS
         RETURN l_ok;
     EXCEPTION
         WHEN OTHERS THEN
-            qubiton_validate_pkg.init(p_error_mode => NULL);
             fnd_log('validate_ap_payment: error for check ' || p_check_id ||
                     ': ' || SQLERRM);
-            -- For payment release, the recommended policy is fail-CLOSED
-            -- (don't release if we can't verify).  Customer overrides via
-            -- QUBITON_VALIDATION_CFG.on_error='E' for module='AP_PAYMENT'.
+            -- Per-rule fail-CLOSED policy lives in QUBITON_VALIDATION_CFG
+            -- (AP_PAYMENT/SANCTION on_error='E').  This handler only runs
+            -- on truly unexpected errors that escape the orchestrator's
+            -- own WHEN OTHERS — fail open here to avoid blocking on
+            -- bugs unrelated to the sanctions verdict itself.
             RETURN TRUE;
     END validate_ap_payment;
 
@@ -975,15 +983,17 @@ AS
             RETURN;
         END IF;
 
-        -- Pull every payment in the instruction.  In real EBS this joins
-        -- IBY_PAYMENTS_ALL → IBY_PAY_INSTRUCTIONS_ALL → AP_CHECKS_ALL.
-        -- The dynamic-SQL pattern keeps the package compilable outside EBS.
+        -- Pull every payment in the instruction.  IBY_PAYMENTS_ALL stores
+        -- the payee as a party_id (HZ_PARTIES.party_id), so we join to
+        -- AP_SUPPLIERS to resolve the AP vendor_id that validate_ap_supplier
+        -- expects.  Dynamic SQL keeps the package compilable outside EBS.
         BEGIN
             EXECUTE IMMEDIATE
-                'SELECT payment_id, payee_party_id ' ||
-                '  FROM iby_payments_all ' ||
-                ' WHERE payment_instruction_id = :1 ' ||
-                '   AND payment_status NOT IN (''VOIDED'',''REJECTED_BY_BANK'')'
+                'SELECT pmt.payment_id, sup.vendor_id ' ||
+                '  FROM iby_payments_all pmt ' ||
+                '  JOIN ap_suppliers sup ON sup.party_id = pmt.payee_party_id ' ||
+                ' WHERE pmt.payment_instruction_id = :1 ' ||
+                '   AND pmt.payment_status NOT IN (''VOIDED'',''REJECTED_BY_BANK'')'
                 BULK COLLECT INTO l_pmts
                 USING p_payment_instruction_id;
         EXCEPTION
@@ -993,11 +1003,10 @@ AS
         END;
 
         FOR i IN 1..l_pmts.COUNT LOOP
-            qubiton_validate_pkg.init(p_error_mode => 'S');
             l_ok := validate_ap_supplier(
                         p_vendor_id    => l_pmts(i).vendor_id,
-                        p_calling_mode => 'CONCURRENT');
-            qubiton_validate_pkg.init(p_error_mode => NULL);
+                        p_calling_mode => 'CONCURRENT',
+                        p_module_name  => 'AP_PAY_BATCH');
 
             IF NOT l_ok THEN
                 -- Mark the payment as held; the standard Payments Manager
@@ -1027,7 +1036,6 @@ AS
         IF l_filtered > 0 THEN COMMIT; END IF;
     EXCEPTION
         WHEN OTHERS THEN
-            qubiton_validate_pkg.init(p_error_mode => NULL);
             fnd_log('screen_payment_batch: error - ' || SQLERRM);
     END screen_payment_batch;
 
@@ -1105,11 +1113,12 @@ AS
             l_doc_id    := l_docs(i).doc_id;
             l_vendor_id := l_docs(i).vendor_id;
 
-            qubiton_validate_pkg.init(p_error_mode => 'S');
+            -- Route to per-module rules so the sweep honours the same
+            -- on_invalid / on_error policy the inline trigger would.
             l_ok := validate_ap_supplier(
                         p_vendor_id    => l_vendor_id,
-                        p_calling_mode => 'CONCURRENT');
-            qubiton_validate_pkg.init(p_error_mode => NULL);
+                        p_calling_mode => 'CONCURRENT',
+                        p_module_name  => UPPER(p_module));
 
             IF l_ok THEN
                 l_count_ok := l_count_ok + 1;
@@ -1130,7 +1139,6 @@ AS
         END IF;
     EXCEPTION
         WHEN OTHERS THEN
-            qubiton_validate_pkg.init(p_error_mode => NULL);
             errbuf  := 'Unexpected error in sweep: ' || SQLERRM;
             retcode := '2';
             fnd_output(errbuf);

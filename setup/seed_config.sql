@@ -53,13 +53,18 @@ USING (
     -- flipped to Y, sane defaults apply immediately.  Customers tune per
     -- module via SQL update on this table.
     --
+    -- Only val_types currently dispatched by qubiton_validate_pkg are
+    -- seeded here (TAX / BANK / ADDRESS / SANCTION).  Extending to a new
+    -- val_type (e.g. CYBER) requires both an orchestrator branch in
+    -- validate_supplier_all AND a matching validate_supplier_<type>
+    -- function — adding only a config row is a no-op and was removed.
+    --
     -- Recommended fail-mode policy:
-    --   PO save           — block on sanctions, warn on cyber, warn-allow on API outage
-    --   AP invoice post   — block on sanctions, silent on cyber (already validated upstream)
+    --   PO save           — block on sanctions, warn-allow on API outage
+    --   AP invoice post   — block on sanctions, warn-allow on API outage
     --   AP payment release — BLOCK on sanctions AND on API outage (last chance)
     --   AP payment batch  — silent (filter, don't abort the run)
     SELECT 'PO',                          'SANCTION',              'Y',           'E',               'W',             NULL,                   'PO save: block on sanctions match'              FROM DUAL UNION ALL
-    SELECT 'PO',                          'CYBER',                 'Y',           'W',               'S',             NULL,                   'PO save: warn on poor cyber score'              FROM DUAL UNION ALL
     SELECT 'AP_INVOICE',                  'SANCTION',              'Y',           'E',               'W',             NULL,                   'AP invoice: block on sanctions match'           FROM DUAL UNION ALL
     SELECT 'AP_INVOICE',                  'TAX',                   'Y',           'W',               'S',             NULL,                   'AP invoice: re-validate tax ID'                 FROM DUAL UNION ALL
     SELECT 'AP_PAYMENT',                  'SANCTION',              'Y',           'E',               'E',             NULL,                   'AP payment: block on sanctions; fail closed on API outage' FROM DUAL UNION ALL

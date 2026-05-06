@@ -48,11 +48,12 @@ Granular control. One row per `(module_name, val_type)` pair.
 | MODULE_NAME | VAL_TYPE | ACTIVE | ON_INVALID | ON_ERROR | Use case |
 |---|---|:------:|:----------:|:--------:|---|
 | PO            | SANCTION | Y | E | W | PO save: block on sanctions, warn on API outage |
-| PO            | CYBER    | Y | W | S | PO save: warn on low cyber score, silent on API outage |
 | AP_INVOICE    | SANCTION | Y | E | W | Invoice posting: block on sanctions |
 | AP_INVOICE    | TAX      | Y | W | S | Invoice posting: re-validate tax ID |
 | AP_PAYMENT    | SANCTION | Y | E | **E** | Payment release: block on sanctions AND on API outage (fail closed) |
 | AP_PAY_BATCH  | SANCTION | Y | S | S | Payment batch: silently filter sanctioned payees from the run |
+
+The orchestrator (`qubiton_validate_pkg.validate_supplier_all`) currently dispatches `TAX`, `BANK`, `ADDRESS`, and `SANCTION`. Other val_types (e.g. `CYBER`, `RISK`) require both an orchestrator branch AND a matching `validate_supplier_<type>` function — adding only a config row is silently ignored.
 
 Maintain via SQL `UPDATE` against `QUBITON_VALIDATION_CFG`. Default rows are seeded by `setup/seed_config.sql`.
 
@@ -63,7 +64,7 @@ Maintain via SQL `UPDATE` against `QUBITON_VALIDATION_CFG`. Default rows are see
 | Stake level | Recommended pattern | Hook | User experience |
 |---|---|---|---|
 | **Block-the-bad-actor** (sanctions, blacklist) | **Inline blocking** (`ON_INVALID = 'E'`) | DML trigger calling `validate_*` | User sees red error message, save aborts |
-| **Warn-and-route** (cyber, risk score, beneficial-owner change) | **Inline warning** (`ON_INVALID = 'W'`) + EBS approval workflow | DML trigger writes to a Z-flag column read by approval rules | User sees yellow warning, save proceeds, approval rule kicks in |
+| **Warn-and-route** (tax mismatch, address change, beneficial-owner change) | **Inline warning** (`ON_INVALID = 'W'`) + EBS approval workflow | DML trigger writes to a Z-flag column read by approval rules | User sees yellow warning, save proceeds, approval rule kicks in |
 | **Telemetry / quality** (address completeness, phone format) | **Inline silent** (`ON_INVALID = 'S'`) | DML trigger logs to `qubiton_api_log` | Save proceeds normally, ops team reviews via report |
 | **Cleanup / mass screening** (every-vendor sanctions sweep) | **Batch** | Concurrent program `qubiton_ebs_pkg.run_txn_batch_validation` | No user impact; nightly summary email |
 
@@ -164,12 +165,12 @@ Wire this into your Payments Manager workflow either via the standard "Validate"
 
 Different transactions have different risk tolerances. The defaults below are seeded by `setup/seed_config.sql`; tune them for your business:
 
-| Module | SANCTION on_invalid | CYBER on_invalid | API on_error | Rationale |
+| Module | SANCTION on_invalid | TAX on_invalid | API on_error | Rationale |
 |---|:---:|:---:|:---:|---|
-| PO save | E (block) | W (warn) | W (warn, allow) | PO is reversible. Allow save when API is down; manual review later. |
-| AP invoice | E (block) | S (silent) | W (warn, allow) | Block sanctioned payees. Cyber risk doesn't add new info at invoice time. |
-| AP payment release | E (block) | E (block) | **E (block)** | Last chance. Even if API is down, hold the payment. |
-| AP payment batch | filter | filter | filter (drop) | Filter pattern — never abort the run. |
+| PO save | E (block) | — | W (warn, allow) | PO is reversible. Allow save when API is down; manual review later. |
+| AP invoice | E (block) | W (warn) | W (warn, allow) | Block sanctioned payees. Re-validate tax ID as a soft warning. |
+| AP payment release | E (block) | — | **E (block)** | Last chance. Even if API is down, hold the payment. |
+| AP payment batch | filter (S) | — | filter (drop) | Filter pattern — never abort the run. |
 | Mass batch sweep | log only | log only | log only | Off-line — log everything, alert ops. |
 
 ## Caching
@@ -182,7 +183,7 @@ If you need stronger client-side caching (e.g., a session-level cache so the sam
 
 ## Approval routing instead of hard-block
 
-For warning-tier validations (cyber score below threshold, beneficial-owner change since last screening), prefer **routing the document into an additional approval tier** rather than hard-blocking. EBS's standard PO Approval Hierarchy and AP Holds framework cover this:
+For warning-tier validations (tax mismatch, address change, beneficial-owner change since last screening), prefer **routing the document into an additional approval tier** rather than hard-blocking. EBS's standard PO Approval Hierarchy and AP Holds framework cover this:
 
 - **PO**: write a Z-flag onto the PO header (e.g., `attribute15`) when validation produces a warning verdict; PO Approval Hierarchy reads the flag and routes to a higher-tier approver
 - **AP invoice**: place a `QUBITON_RISK` invoice hold via `AP_HOLDS_ALL`; AP Holds workflow routes the invoice to the right approver
@@ -265,7 +266,7 @@ Yes, and it's recommended. Inline catches new entries; batch catches what slippe
 
 ### How do I disable just one validation on just one transaction?
 
-`UPDATE qubiton_validation_cfg SET active = 'N' WHERE module_name = 'PO' AND val_type = 'CYBER';`. Other transactions are unaffected.
+`UPDATE qubiton_validation_cfg SET active = 'N' WHERE module_name = 'PO' AND val_type = 'SANCTION';`. Other transactions are unaffected.
 
 ### What if the API is down during PO save?
 
