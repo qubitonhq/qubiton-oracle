@@ -18,7 +18,12 @@ USING (
     SELECT 'WALLET_PASSWORD',               '',                                             'Wallet password (blank for auto-login)'       FROM DUAL UNION ALL
     SELECT 'TIMEOUT',                       '30',                                           'HTTP timeout in seconds'                      FROM DUAL UNION ALL
     SELECT 'ERROR_MODE',                    'E',                                            'Default error mode: E=stop, W=warn, S=silent' FROM DUAL UNION ALL
-    SELECT 'LOG_ENABLED',                   'Y',                                            'Enable API call audit logging: Y/N'           FROM DUAL
+    SELECT 'LOG_ENABLED',                   'Y',                                            'Enable API call audit logging: Y/N'           FROM DUAL UNION ALL
+    -- Transactional-validation feature flags (added v2.1).  Disabled by
+    -- default so installing the connector has zero runtime impact until
+    -- an admin explicitly opts in.
+    SELECT 'TXN_VALIDATION_ENABLED',        'N',                                            'Master kill switch for transactional hooks (PO/AP_INVOICE/AP_PAYMENT). Set to Y to enable.' FROM DUAL UNION ALL
+    SELECT 'TXN_FAIL_MODE',                 'OPEN',                                         'On API outage during txn validation: OPEN=allow save with warning; CLOSED=block.' FROM DUAL
 ) src
 ON (dst.config_key = src.config_key)
 WHEN NOT MATCHED THEN
@@ -42,7 +47,23 @@ USING (
     SELECT 'IPROCUREMENT',                'TAX',                   'Y',           'E',               'W',             NULL,                   'Tax ID validation for iProcurement vendors' FROM DUAL UNION ALL
     SELECT 'IPROCUREMENT',                'SANCTION',              'Y',           'E',               'W',             NULL,                   'Sanctions screening for iProcurement'       FROM DUAL UNION ALL
     -- Bank (iPayments)
-    SELECT 'IBY_BANK',                    'BANK',                  'Y',           'E',               'W',             NULL,                   'Bank account validation for iPayments'      FROM DUAL
+    SELECT 'IBY_BANK',                    'BANK',                  'Y',           'E',               'W',             NULL,                   'Bank account validation for iPayments'      FROM DUAL UNION ALL
+    -- ── Transactional document hooks (added v2.1) ─────────────────────
+    -- All start ACTIVE='Y' so when the master TXN_VALIDATION_ENABLED is
+    -- flipped to Y, sane defaults apply immediately.  Customers tune per
+    -- module via SQL update on this table.
+    --
+    -- Recommended fail-mode policy:
+    --   PO save           — block on sanctions, warn on cyber, warn-allow on API outage
+    --   AP invoice post   — block on sanctions, silent on cyber (already validated upstream)
+    --   AP payment release — BLOCK on sanctions AND on API outage (last chance)
+    --   AP payment batch  — silent (filter, don't abort the run)
+    SELECT 'PO',                          'SANCTION',              'Y',           'E',               'W',             NULL,                   'PO save: block on sanctions match'              FROM DUAL UNION ALL
+    SELECT 'PO',                          'CYBER',                 'Y',           'W',               'S',             NULL,                   'PO save: warn on poor cyber score'              FROM DUAL UNION ALL
+    SELECT 'AP_INVOICE',                  'SANCTION',              'Y',           'E',               'W',             NULL,                   'AP invoice: block on sanctions match'           FROM DUAL UNION ALL
+    SELECT 'AP_INVOICE',                  'TAX',                   'Y',           'W',               'S',             NULL,                   'AP invoice: re-validate tax ID'                 FROM DUAL UNION ALL
+    SELECT 'AP_PAYMENT',                  'SANCTION',              'Y',           'E',               'E',             NULL,                   'AP payment: block on sanctions; fail closed on API outage' FROM DUAL UNION ALL
+    SELECT 'AP_PAY_BATCH',                'SANCTION',              'Y',           'S',               'S',             NULL,                   'AP payment batch: filter sanctioned payees silently'       FROM DUAL
 ) src
 ON (dst.module_name = src.module_name AND dst.val_type = src.val_type)
 WHEN NOT MATCHED THEN

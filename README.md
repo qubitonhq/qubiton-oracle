@@ -223,8 +223,9 @@ Pre-built hooks for Oracle E-Business Suite:
 - **AR Customer validation** — trigger-based
 - **iProcurement** — POR_CUSTOM_PKG extension for vendor screening
 - **Batch validation** — FND concurrent program with range and country filters
+- **Transactional validation (PO / AP invoice / AP payment)** — DML triggers + concurrent-program nightly sweep, with master kill switch and per-module fail-mode policy
 
-See [docs/ebs-integration.md](docs/ebs-integration.md) for trigger code, concurrent program registration, and rollout strategy.
+See [docs/ebs-integration.md](docs/ebs-integration.md) for supplier/customer master-data hooks and [docs/transaction-validation.md](docs/transaction-validation.md) for the document-level hooks (PO_HEADERS_ALL / AP_INVOICES_ALL / AP_CHECKS_ALL).
 
 ## Fusion Cloud Integration
 
@@ -273,7 +274,8 @@ END;
 | [Setup Guide](docs/setup.md) | Prerequisites, installation, wallet, ACL, troubleshooting |
 | [Configuration](docs/configuration.md) | All config options, validation rules, custom modules |
 | [API Examples](docs/examples.md) | Code examples for all 41 API methods |
-| [EBS Integration](docs/ebs-integration.md) | AP, AR, iProcurement, concurrent programs |
+| [EBS Integration](docs/ebs-integration.md) | AP supplier / AR customer / iProcurement master-data hooks + concurrent programs |
+| **[Transaction Validation](docs/transaction-validation.md)** | **Document-level hooks (PO/AP_INVOICE/AP_PAYMENT) + nightly batch sweep + kill switch + per-module fail-mode policy** |
 | [Fusion Integration](docs/fusion-integration.md) | OIC, ADB, VBCS, SQM patterns |
 | [Oracle Certification](docs/oracle-certification.md) | Object inventory, security, compatibility matrix |
 

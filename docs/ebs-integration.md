@@ -2,6 +2,8 @@
 
 This guide covers integration patterns for Oracle EBS R12 using the Layer 3 `qubiton_ebs_pkg` package.
 
+> **Looking for transactional documents?** This page covers the **master-data** hooks (AP_SUPPLIERS, HZ_PARTIES, iProcurement requisitions). For purchase orders (PO_HEADERS_ALL), AP invoices (AP_INVOICES_ALL), AP payments (AP_CHECKS_ALL), and payment-batch screening (IBY_PAY_INSTRUCTIONS_ALL) — plus the master kill switch and per-module fail-mode policy — see [Transaction Validation](transaction-validation.md).
+
 ## Architecture
 
 ```
