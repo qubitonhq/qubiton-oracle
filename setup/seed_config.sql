@@ -63,12 +63,19 @@ USING (
     --   PO save           — block on sanctions, warn-allow on API outage
     --   AP invoice post   — block on sanctions, warn-allow on API outage
     --   AP payment release — BLOCK on sanctions AND on API outage (last chance)
-    --   AP payment batch  — silent (filter, don't abort the run)
+    --   AP payment batch  — block on sanctions (so screen_payment_batch
+    --                       removes sanctioned payees), silent on API
+    --                       outage (clean payees still proceed even if
+    --                       the API is unreachable mid-run).  Note:
+    --                       on_invalid MUST be 'E' here — 'S' makes
+    --                       apply_error_mode set blocked=FALSE, which
+    --                       makes screen_payment_batch silently skip
+    --                       every sanctions hit.
     SELECT 'PO',                          'SANCTION',              'Y',           'E',               'W',             NULL,                   'PO save: block on sanctions match'              FROM DUAL UNION ALL
     SELECT 'AP_INVOICE',                  'SANCTION',              'Y',           'E',               'W',             NULL,                   'AP invoice: block on sanctions match'           FROM DUAL UNION ALL
     SELECT 'AP_INVOICE',                  'TAX',                   'Y',           'W',               'S',             NULL,                   'AP invoice: re-validate tax ID'                 FROM DUAL UNION ALL
     SELECT 'AP_PAYMENT',                  'SANCTION',              'Y',           'E',               'E',             NULL,                   'AP payment: block on sanctions; fail closed on API outage' FROM DUAL UNION ALL
-    SELECT 'AP_PAY_BATCH',                'SANCTION',              'Y',           'S',               'S',             NULL,                   'AP payment batch: filter sanctioned payees silently'       FROM DUAL
+    SELECT 'AP_PAY_BATCH',                'SANCTION',              'Y',           'E',               'S',             NULL,                   'AP payment batch: surface sanctions match to caller (so the batch sweep removes the payee); silent on API outage' FROM DUAL
 ) src
 ON (dst.module_name = src.module_name AND dst.val_type = src.val_type)
 WHEN NOT MATCHED THEN

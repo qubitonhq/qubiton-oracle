@@ -117,7 +117,7 @@ Returns `FALSE` to block the save; the trigger turns this into `RAISE_APPLICATIO
 CREATE OR REPLACE TRIGGER qubiton_po_headers_validate
     BEFORE INSERT OR UPDATE OF authorization_status ON apps.po_headers_all
     FOR EACH ROW
-    WHEN ( :new.authorization_status IN ('APPROVED','IN_PROCESS') )
+    WHEN ( :new.authorization_status IN ('APPROVED','IN PROCESS','PRE-APPROVED','REQUIRES REAPPROVAL') )
 DECLARE l_ok BOOLEAN;
 BEGIN
     l_ok := qubiton_ebs_pkg.validate_po_header(:new.po_header_id, 'TRIGGER');

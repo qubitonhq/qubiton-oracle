@@ -80,6 +80,13 @@ AS
         -- Query supplier header for name, type, country, tax reference.
         -- Join to primary site for address details.
         -- Left join to IBY external bank accounts for bank details.
+        -- Per-vendor pick of one primary-pay site / one preferred bank
+        -- account.  The earlier inline subqueries used `ROWNUM = 1`
+        -- without correlating to `s.vendor_id`, so the entire subquery
+        -- returned ONE GLOBAL ROW — meaning every supplier other than
+        -- whichever vendor that row happened to belong to came back
+        -- with NULL address/bank fields.  KEEP-DENSE_RANK aggregates one
+        -- deterministic row per vendor.
         l_sql := q'[
             SELECT s.vendor_id,
                    s.vendor_name,
@@ -90,25 +97,30 @@ AS
                    ss.address_line2,
                    ss.city,
                    ss.state,
-                   ss.zip                                AS postal_code,
-                   ieba.bank_account_name                AS bank_account_holder,
-                   ieba.bank_account_num                 AS account_number,
-                   ieba.iban                             AS iban,
-                   ieba.bank_number                      AS bank_code
+                   ss.postal_code,
+                   ieba.bank_account_holder,
+                   ieba.account_number,
+                   ieba.iban,
+                   ieba.bank_code
               FROM ap_suppliers s
               LEFT JOIN (
-                  SELECT vendor_id, country,
-                         address_line1, address_line2, city, state, zip
+                  SELECT vendor_id,
+                         MAX(country)       KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS country,
+                         MAX(address_line1) KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS address_line1,
+                         MAX(address_line2) KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS address_line2,
+                         MAX(city)          KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS city,
+                         MAX(state)         KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS state,
+                         MAX(zip)           KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS postal_code
                     FROM ap_supplier_sites_all
                    WHERE primary_pay_site_flag = 'Y'
-                     AND ROWNUM = 1
+                   GROUP BY vendor_id
               ) ss ON ss.vendor_id = s.vendor_id
               LEFT JOIN (
                   SELECT iepa.payee_party_id,
-                         ieba.bank_account_name,
-                         ieba.bank_account_num,
-                         ieba.iban,
-                         iebb.bank_number
+                         MAX(ieba.bank_account_name) KEEP (DENSE_RANK FIRST ORDER BY ipiu.order_of_preference, ieba.ext_bank_account_id) AS bank_account_holder,
+                         MAX(ieba.bank_account_num)  KEEP (DENSE_RANK FIRST ORDER BY ipiu.order_of_preference, ieba.ext_bank_account_id) AS account_number,
+                         MAX(ieba.iban)              KEEP (DENSE_RANK FIRST ORDER BY ipiu.order_of_preference, ieba.ext_bank_account_id) AS iban,
+                         MAX(iebb.bank_number)       KEEP (DENSE_RANK FIRST ORDER BY ipiu.order_of_preference, ieba.ext_bank_account_id) AS bank_code
                     FROM iby_external_payees_all iepa
                     JOIN iby_pmt_instr_uses_all ipiu
                       ON ipiu.ext_pmt_party_id = iepa.ext_payee_id
@@ -117,8 +129,7 @@ AS
                       ON ieba.ext_bank_account_id = ipiu.instrument_id
                     LEFT JOIN iby_ext_banks_v iebb
                       ON iebb.bank_party_id = ieba.bank_id
-                   WHERE ipiu.order_of_preference = 1
-                     AND ROWNUM = 1
+                   GROUP BY iepa.payee_party_id
               ) ieba ON ieba.payee_party_id = s.party_id
              WHERE s.vendor_id = :1
         ]';
@@ -156,14 +167,19 @@ AS
                            ss.address_line2,
                            ss.city,
                            ss.state,
-                           ss.zip                                AS postal_code
+                           ss.postal_code
                       FROM ap_suppliers s
                       LEFT JOIN (
-                          SELECT vendor_id, country,
-                                 address_line1, address_line2, city, state, zip
+                          SELECT vendor_id,
+                                 MAX(country)       KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS country,
+                                 MAX(address_line1) KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS address_line1,
+                                 MAX(address_line2) KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS address_line2,
+                                 MAX(city)          KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS city,
+                                 MAX(state)         KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS state,
+                                 MAX(zip)           KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS postal_code
                             FROM ap_supplier_sites_all
                            WHERE primary_pay_site_flag = 'Y'
-                             AND ROWNUM = 1
+                           GROUP BY vendor_id
                       ) ss ON ss.vendor_id = s.vendor_id
                      WHERE s.vendor_id = :1
                 ]';
@@ -183,6 +199,10 @@ AS
 
                 -- Bank fields remain NULL from record initialization
                 RETURN l_rec;
+            EXCEPTION
+                WHEN NO_DATA_FOUND THEN
+                    -- Vendor not found at all — let caller handle.
+                    RAISE;
             END;
 
         WHEN OTHERS THEN
@@ -198,14 +218,19 @@ AS
                            ss.address_line2,
                            ss.city,
                            ss.state,
-                           ss.zip                                AS postal_code
+                           ss.postal_code
                       FROM ap_suppliers s
                       LEFT JOIN (
-                          SELECT vendor_id, country,
-                                 address_line1, address_line2, city, state, zip
+                          SELECT vendor_id,
+                                 MAX(country)       KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS country,
+                                 MAX(address_line1) KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS address_line1,
+                                 MAX(address_line2) KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS address_line2,
+                                 MAX(city)          KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS city,
+                                 MAX(state)         KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS state,
+                                 MAX(zip)           KEEP (DENSE_RANK FIRST ORDER BY supplier_site_id) AS postal_code
                             FROM ap_supplier_sites_all
                            WHERE primary_pay_site_flag = 'Y'
-                             AND ROWNUM = 1
+                           GROUP BY vendor_id
                       ) ss ON ss.vendor_id = s.vendor_id
                      WHERE s.vendor_id = :1
                 ]';
@@ -253,12 +278,19 @@ AS
         l_rec t_customer_rec;
         l_sql VARCHAR2(4000);
     BEGIN
+        -- HZ_PARTIES holds two tax-related columns:
+        --   tax_reference     — generic free-form tax ref
+        --   jgzz_fiscal_code  — globalisation/jurisdiction tax ID
+        --                       (VAT, ABN, CNPJ, etc.) populated by
+        --                       most country localisations.
+        -- Different localisations populate one or the other; coalesce
+        -- so the QubitOn tax check doesn't silently lose IDs.
         l_sql := q'[
             SELECT ca.cust_account_id,
                    hp.party_name,
                    hp.party_type,
                    hp.country,
-                   hp.tax_reference,
+                   NVL(hp.jgzz_fiscal_code, hp.tax_reference) AS tax_reference,
                    NVL(hl.address1, hp.address1)     AS address_line1,
                    NVL(hl.address2, hp.address2)     AS address_line2,
                    NVL(hl.city, hp.city)             AS city,
@@ -1015,23 +1047,53 @@ AS
                         p_module_name  => 'AP_PAY_BATCH');
 
             IF NOT l_ok THEN
-                -- Mark the payment as held; the standard Payments Manager
-                -- run skips HELD payments.  Customer extends with a
-                -- QUBITON_PAYMENT_BLOCK_LOG insert for AP visibility.
+                -- Take the payment out of the instruction so the bank
+                -- send skips it.  Notes on the column set:
+                --
+                --   * IBY_PAYMENTS_ALL.payment_status is controlled by
+                --     lookup IBY_PAYMENT_STATUSES.  Per Oracle eTRM
+                --     12.2.2 the documented values include
+                --     CREATED / FORMATTED / TRANSMITTED and the
+                --     PPR-lifecycle values REMOVED_FROM_PROCESSING /
+                --     REMOVED_INSTRUCTION_TERMINATED.  'HELD' is NOT
+                --     a documented value; the prior PR set it and
+                --     would have failed the FK to iby_lookups.
+                --
+                --   * 'hold_reason', 'removed_from_instr_flag',
+                --     'removed_reason_code', 'removed_reason_text' do
+                --     NOT exist on iby_payments_all (verified against
+                --     eTRM 12.2.2 / Cloud EDM 25b).  Only set columns
+                --     that exist on the table.
+                --
+                --   * The canonical, supported way to terminate a
+                --     payment in an instruction is to call
+                --     IBY_DISBURSE_UI_API_PUB_PKG.terminate_payments
+                --     (the public API).  If your customisation has
+                --     a wrapper around it, prefer that over a direct
+                --     UPDATE.  The direct UPDATE here is a minimal-
+                --     dependency fallback that flips the lifecycle
+                --     status only — your AP team needs the reason in
+                --     a Z-table or the FND log to investigate.
                 BEGIN
                     EXECUTE IMMEDIATE
                         'UPDATE iby_payments_all ' ||
-                        '   SET payment_status = ''HELD'', ' ||
-                        '       hold_reason    = ''QUBITON_SANCTIONS'' ' ||
-                        ' WHERE payment_id     = :1'
+                        '   SET payment_status    = ''REMOVED_FROM_PROCESSING'', ' ||
+                        '       last_update_date  = SYSDATE, ' ||
+                        '       last_updated_by   = NVL(FND_GLOBAL.USER_ID, -1), ' ||
+                        '       last_update_login = NVL(FND_GLOBAL.LOGIN_ID, -1) ' ||
+                        ' WHERE payment_id        = :1'
                         USING l_pmts(i).payment_id;
                     l_filtered := l_filtered + 1;
-                    fnd_log('screen_payment_batch: HELD payment ' ||
+                    -- Reason captured in the FND concurrent-program
+                    -- log (and in qubiton_api_log for the API call
+                    -- itself).  Customers wanting structured AP-
+                    -- visible audit add an INSERT into a Z-table here.
+                    fnd_log('screen_payment_batch: REMOVED_FROM_PROCESSING payment ' ||
                             l_pmts(i).payment_id || ' (vendor ' ||
-                            l_pmts(i).vendor_id || ' sanctioned)');
+                            l_pmts(i).vendor_id || ' — sanctioned, reason: QUBITON_SANCTIONS)');
                 EXCEPTION
                     WHEN OTHERS THEN
-                        fnd_log('screen_payment_batch: failed to hold payment ' ||
+                        fnd_log('screen_payment_batch: failed to remove payment ' ||
                                 l_pmts(i).payment_id || ' - ' || SQLERRM);
                 END;
             END IF;
@@ -1086,21 +1148,40 @@ AS
         --   AP_CHECKS_ALL.status_lookup_code ∈ {NEGOTIABLE, VOIDED,
         --     RECONCILED, STOPPED, OVERFLOW, SET UP} — only NEGOTIABLE
         --     is "live, not yet cleared".
+        -- Use GREATEST(NVL(creation_date, last_update_date),
+        --              NVL(last_update_date, creation_date))
+        -- so amended documents inside the lookback window are caught
+        -- even when originally created earlier (PO line additions,
+        -- vendor swaps, invoice adjustments).  NVL pair guards
+        -- against either column being NULL — EBS standard tables have
+        -- both as NOT NULL but data migrations sometimes leave gaps.
+        --
+        -- PO authorization_status canonical values (lookup_type
+        -- 'AUTHORIZATION STATUS' in PO_LOOKUP_CODES) use SPACE not
+        -- underscore: 'APPROVED' / 'CANCELLED' / 'IN PROCESS' /
+        -- 'INCOMPLETE' / 'PRE-APPROVED' / 'REJECTED' /
+        -- 'REQUIRES REAPPROVAL' / 'RETURNED'.  Use 'IN PROCESS' (with
+        -- space) — 'IN_PROCESS' silently matches zero rows.  Include
+        -- 'REQUIRES REAPPROVAL' so live POs awaiting re-auth after a
+        -- header change still get re-screened.
         CASE UPPER(p_module)
             WHEN 'PO' THEN
                 l_sql := 'SELECT po_header_id, vendor_id FROM po_headers_all ' ||
-                         ' WHERE creation_date >= SYSDATE - :1 ' ||
+                         ' WHERE GREATEST(NVL(creation_date, last_update_date), ' ||
+                         '                NVL(last_update_date, creation_date)) >= SYSDATE - :1 ' ||
                          '   AND closed_code = ''OPEN'' ' ||
-                         '   AND authorization_status IN (''APPROVED'',''IN_PROCESS'',''PRE-APPROVED'') ' ||
+                         '   AND authorization_status IN (''APPROVED'',''IN PROCESS'',''PRE-APPROVED'',''REQUIRES REAPPROVAL'') ' ||
                          '   AND vendor_id IS NOT NULL';
             WHEN 'AP_INVOICE' THEN
                 l_sql := 'SELECT invoice_id, vendor_id FROM ap_invoices_all ' ||
-                         ' WHERE invoice_date >= SYSDATE - :1 ' ||
+                         ' WHERE GREATEST(NVL(invoice_date, last_update_date), ' ||
+                         '                NVL(last_update_date, invoice_date)) >= SYSDATE - :1 ' ||
                          '   AND payment_status_flag IN (''N'',''P'') ' ||
                          '   AND vendor_id IS NOT NULL';
             WHEN 'AP_PAYMENT' THEN
                 l_sql := 'SELECT check_id, vendor_id FROM ap_checks_all ' ||
-                         ' WHERE check_date >= SYSDATE - :1 ' ||
+                         ' WHERE GREATEST(NVL(check_date, last_update_date), ' ||
+                         '                NVL(last_update_date, check_date)) >= SYSDATE - :1 ' ||
                          '   AND status_lookup_code = ''NEGOTIABLE'' ' ||
                          '   AND vendor_id IS NOT NULL';
             ELSE
