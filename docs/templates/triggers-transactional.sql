@@ -52,15 +52,20 @@
 -- BLOCKS:   sanctions hit (per QUBITON_VALIDATION_CFG with module='PO')
 -- POLICY:   fail open on API outage (allow PO save with warning)
 --
--- Skips changes that don't move the PO into APPROVED/IN_PROCESS state
+-- Skips changes that don't move the PO into an authorisation state
+-- ('APPROVED', 'IN PROCESS', 'PRE-APPROVED', 'REQUIRES REAPPROVAL')
 -- to avoid noise on header-only edits.
 
 /*
+-- authorization_status uses SPACES, not underscores, in PO_LOOKUP_CODES
+-- (lookup_type 'AUTHORIZATION STATUS').  Canonical: 'IN PROCESS' /
+-- 'PRE-APPROVED' / 'REQUIRES REAPPROVAL'.  'IN_PROCESS' silently
+-- matches zero rows — that was the bug in the first cut of this file.
 CREATE OR REPLACE TRIGGER qubiton_po_headers_validate
     BEFORE INSERT OR UPDATE OF authorization_status ON apps.po_headers_all
     FOR EACH ROW
     WHEN (
-        :new.authorization_status IN ('APPROVED','IN_PROCESS','PRE-APPROVED')
+        :new.authorization_status IN ('APPROVED','IN PROCESS','PRE-APPROVED','REQUIRES REAPPROVAL')
         AND :new.vendor_id IS NOT NULL
     )
 DECLARE
