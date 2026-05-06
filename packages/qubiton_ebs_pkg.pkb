@@ -343,13 +343,21 @@ AS
     ---------------------------------------------------------------------------
     FUNCTION validate_ap_supplier (
         p_vendor_id    NUMBER,
-        p_calling_mode VARCHAR2 DEFAULT 'TRIGGER'
+        p_calling_mode VARCHAR2 DEFAULT 'TRIGGER',
+        p_module_name  VARCHAR2 DEFAULT NULL
     ) RETURN BOOLEAN
     IS
         l_sup      t_supplier_rec;
         l_ok       BOOLEAN;
         l_tax_type VARCHAR2(30);
+        l_module   VARCHAR2(30);
     BEGIN
+        -- Resolve effective module name.  Transactional callers pass
+        -- 'PO' / 'AP_INVOICE' / 'AP_PAYMENT' / 'AP_PAY_BATCH' so the
+        -- per-document fail-mode rules in QUBITON_VALIDATION_CFG apply.
+        -- Master-data callers leave it NULL and fall back to AP_SUPPLIERS.
+        l_module := NVL(p_module_name, gc_module_ap);
+
         -- Fetch supplier data from EBS tables
         BEGIN
             l_sup := fetch_supplier(p_vendor_id);
@@ -366,10 +374,10 @@ AS
         -- Determine tax type from country for the tax validation
         l_tax_type := qubiton_validate_pkg.determine_tax_type(l_sup.country);
 
-        -- Run all active validations for AP_SUPPLIERS module
+        -- Run all active validations for the resolved module
         -- Maps fetched EBS fields to the new validate_pkg parameter names
         l_ok := qubiton_validate_pkg.validate_supplier_all(
-            p_module_name          => gc_module_ap,
+            p_module_name          => l_module,
             p_vendor_id            => l_sup.vendor_id,
             p_vendor_name          => l_sup.vendor_name,
             p_country              => l_sup.country,
@@ -747,6 +755,394 @@ AS
             fnd_log('qubiton_ebs_pkg.on_customer_update: error for customer '
                      || p_cust_account_id || ': ' || SQLERRM);
     END on_customer_update;
+
+    ---------------------------------------------------------------------------
+    -- Transactional document validation hooks (PO / AP invoice / payment)
+    --
+    -- Each function:
+    --   1. Checks the master kill switch (TXN_VALIDATION_ENABLED) — if off,
+    --      RETURN TRUE immediately (no API call, no DB read, no log).
+    --   2. Looks up the supplier/payee referenced by the document.
+    --   3. Delegates to qubiton_validate_pkg for the actual screening.
+    --   4. Returns FALSE only on a hard block (sanctions match + on_invalid='E');
+    --      warn / silent verdicts return TRUE so the caller's trigger lets
+    --      the transaction proceed.
+    ---------------------------------------------------------------------------
+
+    -- Cache for the master kill switch to avoid hitting QUBITON_CONFIG on every
+    -- call within a session (especially relevant for batch sweeps).
+    g_txn_enabled_cached BOOLEAN := NULL;
+
+    FUNCTION is_txn_validation_enabled RETURN BOOLEAN
+    IS
+        l_value VARCHAR2(10);
+    BEGIN
+        IF g_txn_enabled_cached IS NOT NULL THEN
+            RETURN g_txn_enabled_cached;
+        END IF;
+
+        BEGIN
+            SELECT UPPER(config_value) INTO l_value
+              FROM qubiton_config
+             WHERE config_key = 'TXN_VALIDATION_ENABLED';
+
+            g_txn_enabled_cached := (l_value = 'Y');
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                -- Row missing from QUBITON_CONFIG = feature disabled.  Customer
+                -- can opt in by running setup/seed_config.sql or inserting the
+                -- row manually:
+                --   INSERT INTO qubiton_config(config_key, config_value)
+                --   VALUES('TXN_VALIDATION_ENABLED', 'Y');
+                g_txn_enabled_cached := FALSE;
+            WHEN OTHERS THEN
+                -- Table missing or other DB error — fail open (validate disabled).
+                g_txn_enabled_cached := FALSE;
+        END;
+
+        RETURN g_txn_enabled_cached;
+    END is_txn_validation_enabled;
+
+    ---------------------------------------------------------------------------
+    -- PO header validation
+    ---------------------------------------------------------------------------
+    FUNCTION validate_po_header (
+        p_po_header_id NUMBER,
+        p_calling_mode VARCHAR2 DEFAULT 'TRIGGER'
+    ) RETURN BOOLEAN
+    IS
+        l_vendor_id NUMBER;
+        l_ok        BOOLEAN := TRUE;
+    BEGIN
+        IF NOT is_txn_validation_enabled THEN
+            RETURN TRUE;
+        END IF;
+
+        -- Read the vendor referenced by the PO via dynamic SQL so the package
+        -- compiles outside EBS (PO_HEADERS_ALL only exists on EBS).
+        BEGIN
+            EXECUTE IMMEDIATE
+                'SELECT vendor_id FROM po_headers_all WHERE po_header_id = :1'
+                INTO l_vendor_id
+                USING p_po_header_id;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN
+                fnd_log('validate_po_header: PO ' || p_po_header_id || ' not found');
+                RETURN TRUE;   -- not our concern
+            WHEN OTHERS THEN
+                fnd_log('validate_po_header: cannot read po_headers_all - ' || SQLERRM);
+                RETURN TRUE;   -- fail open
+        END;
+
+        IF l_vendor_id IS NULL THEN
+            -- Stock transfer / no vendor — skip
+            RETURN TRUE;
+        END IF;
+
+        -- Re-screen the supplier on the PO for sanctions and any other
+        -- val_types active under module='PO' in QUBITON_VALIDATION_CFG.
+        -- The orchestrator honours the per-row on_invalid / on_error rules
+        -- (e.g. block on sanctions, warn-allow on API outage) so we do
+        -- NOT call init() here — overriding the global error mode would
+        -- defeat the per-module policy seeded in setup/seed_config.sql.
+        l_ok := validate_ap_supplier(
+                    p_vendor_id    => l_vendor_id,
+                    p_calling_mode => p_calling_mode,
+                    p_module_name  => 'PO');
+
+        IF NOT l_ok THEN
+            fnd_log('validate_po_header: BLOCKED PO ' || p_po_header_id ||
+                    ' — supplier ' || l_vendor_id || ' failed validation');
+        END IF;
+
+        RETURN l_ok;
+    EXCEPTION
+        WHEN OTHERS THEN
+            fnd_log('validate_po_header: error for PO ' || p_po_header_id ||
+                    ': ' || SQLERRM);
+            -- Fail open: when the QubitOn API is down, allow PO save
+            -- (override by setting QUBITON_VALIDATION_CFG.on_error='E' for
+            -- module='PO' if your policy is strict-fail-closed).
+            RETURN TRUE;
+    END validate_po_header;
+
+    ---------------------------------------------------------------------------
+    -- AP invoice validation
+    ---------------------------------------------------------------------------
+    FUNCTION validate_ap_invoice (
+        p_invoice_id   NUMBER,
+        p_calling_mode VARCHAR2 DEFAULT 'TRIGGER'
+    ) RETURN BOOLEAN
+    IS
+        l_vendor_id NUMBER;
+        l_ok        BOOLEAN := TRUE;
+    BEGIN
+        IF NOT is_txn_validation_enabled THEN
+            RETURN TRUE;
+        END IF;
+
+        BEGIN
+            EXECUTE IMMEDIATE
+                'SELECT vendor_id FROM ap_invoices_all WHERE invoice_id = :1'
+                INTO l_vendor_id
+                USING p_invoice_id;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN RETURN TRUE;
+            WHEN OTHERS THEN
+                fnd_log('validate_ap_invoice: cannot read ap_invoices_all - ' || SQLERRM);
+                RETURN TRUE;
+        END;
+
+        IF l_vendor_id IS NULL THEN RETURN TRUE; END IF;
+
+        l_ok := validate_ap_supplier(
+                    p_vendor_id    => l_vendor_id,
+                    p_calling_mode => p_calling_mode,
+                    p_module_name  => 'AP_INVOICE');
+
+        IF NOT l_ok THEN
+            fnd_log('validate_ap_invoice: BLOCKED invoice ' || p_invoice_id ||
+                    ' — supplier ' || l_vendor_id || ' failed validation');
+        END IF;
+        RETURN l_ok;
+    EXCEPTION
+        WHEN OTHERS THEN
+            fnd_log('validate_ap_invoice: error for invoice ' || p_invoice_id ||
+                    ': ' || SQLERRM);
+            RETURN TRUE;   -- fail open
+    END validate_ap_invoice;
+
+    ---------------------------------------------------------------------------
+    -- AP payment validation (last-chance check before bank send)
+    ---------------------------------------------------------------------------
+    FUNCTION validate_ap_payment (
+        p_check_id     NUMBER,
+        p_calling_mode VARCHAR2 DEFAULT 'TRIGGER'
+    ) RETURN BOOLEAN
+    IS
+        l_vendor_id NUMBER;
+        l_ok        BOOLEAN := TRUE;
+    BEGIN
+        IF NOT is_txn_validation_enabled THEN
+            RETURN TRUE;
+        END IF;
+
+        BEGIN
+            EXECUTE IMMEDIATE
+                'SELECT vendor_id FROM ap_checks_all WHERE check_id = :1'
+                INTO l_vendor_id
+                USING p_check_id;
+        EXCEPTION
+            WHEN NO_DATA_FOUND THEN RETURN TRUE;
+            WHEN OTHERS THEN
+                fnd_log('validate_ap_payment: cannot read ap_checks_all - ' || SQLERRM);
+                RETURN TRUE;
+        END;
+
+        IF l_vendor_id IS NULL THEN RETURN TRUE; END IF;
+
+        l_ok := validate_ap_supplier(
+                    p_vendor_id    => l_vendor_id,
+                    p_calling_mode => p_calling_mode,
+                    p_module_name  => 'AP_PAYMENT');
+
+        IF NOT l_ok THEN
+            fnd_log('validate_ap_payment: BLOCKED check ' || p_check_id ||
+                    ' — supplier ' || l_vendor_id || ' on sanctions list');
+        END IF;
+        RETURN l_ok;
+    EXCEPTION
+        WHEN OTHERS THEN
+            fnd_log('validate_ap_payment: error for check ' || p_check_id ||
+                    ': ' || SQLERRM);
+            -- Per-rule fail-CLOSED policy lives in QUBITON_VALIDATION_CFG
+            -- (AP_PAYMENT/SANCTION on_error='E').  This handler only runs
+            -- on truly unexpected errors that escape the orchestrator's
+            -- own WHEN OTHERS — fail open here to avoid blocking on
+            -- bugs unrelated to the sanctions verdict itself.
+            RETURN TRUE;
+    END validate_ap_payment;
+
+    ---------------------------------------------------------------------------
+    -- Payment-batch screening (filter, do NOT abort the run)
+    ---------------------------------------------------------------------------
+    PROCEDURE screen_payment_batch (
+        p_payment_instruction_id NUMBER
+    )
+    IS
+        TYPE t_pmt_rec IS RECORD (
+            payment_id NUMBER,
+            vendor_id  NUMBER
+        );
+        TYPE t_pmts IS TABLE OF t_pmt_rec;
+        l_pmts t_pmts;
+        l_ok   BOOLEAN;
+        l_filtered NUMBER := 0;
+    BEGIN
+        IF NOT is_txn_validation_enabled THEN
+            RETURN;
+        END IF;
+
+        -- Pull every payment in the instruction.  IBY_PAYMENTS_ALL stores
+        -- the payee as a party_id (HZ_PARTIES.party_id), so we join to
+        -- AP_SUPPLIERS to resolve the AP vendor_id that validate_ap_supplier
+        -- expects.  Dynamic SQL keeps the package compilable outside EBS.
+        BEGIN
+            EXECUTE IMMEDIATE
+                'SELECT pmt.payment_id, sup.vendor_id ' ||
+                '  FROM iby_payments_all pmt ' ||
+                '  JOIN ap_suppliers sup ON sup.party_id = pmt.payee_party_id ' ||
+                ' WHERE pmt.payment_instruction_id = :1 ' ||
+                '   AND pmt.payment_status NOT IN (''VOIDED'',''REJECTED_BY_BANK'')'
+                BULK COLLECT INTO l_pmts
+                USING p_payment_instruction_id;
+        EXCEPTION
+            WHEN OTHERS THEN
+                fnd_log('screen_payment_batch: cannot read iby_payments_all - ' || SQLERRM);
+                RETURN;
+        END;
+
+        FOR i IN 1..l_pmts.COUNT LOOP
+            l_ok := validate_ap_supplier(
+                        p_vendor_id    => l_pmts(i).vendor_id,
+                        p_calling_mode => 'CONCURRENT',
+                        p_module_name  => 'AP_PAY_BATCH');
+
+            IF NOT l_ok THEN
+                -- Mark the payment as held; the standard Payments Manager
+                -- run skips HELD payments.  Customer extends with a
+                -- QUBITON_PAYMENT_BLOCK_LOG insert for AP visibility.
+                BEGIN
+                    EXECUTE IMMEDIATE
+                        'UPDATE iby_payments_all ' ||
+                        '   SET payment_status = ''HELD'', ' ||
+                        '       hold_reason    = ''QUBITON_SANCTIONS'' ' ||
+                        ' WHERE payment_id     = :1'
+                        USING l_pmts(i).payment_id;
+                    l_filtered := l_filtered + 1;
+                    fnd_log('screen_payment_batch: HELD payment ' ||
+                            l_pmts(i).payment_id || ' (vendor ' ||
+                            l_pmts(i).vendor_id || ' sanctioned)');
+                EXCEPTION
+                    WHEN OTHERS THEN
+                        fnd_log('screen_payment_batch: failed to hold payment ' ||
+                                l_pmts(i).payment_id || ' - ' || SQLERRM);
+                END;
+            END IF;
+        END LOOP;
+
+        fnd_log('screen_payment_batch: instruction ' || p_payment_instruction_id ||
+                ' — filtered ' || l_filtered || ' of ' || l_pmts.COUNT || ' payments');
+        IF l_filtered > 0 THEN COMMIT; END IF;
+    EXCEPTION
+        WHEN OTHERS THEN
+            fnd_log('screen_payment_batch: error - ' || SQLERRM);
+    END screen_payment_batch;
+
+    ---------------------------------------------------------------------------
+    -- Concurrent program: nightly batch sweep
+    ---------------------------------------------------------------------------
+    PROCEDURE run_txn_batch_validation (
+        errbuf            OUT VARCHAR2,
+        retcode           OUT VARCHAR2,
+        p_module          VARCHAR2,
+        p_lookback_days   NUMBER   DEFAULT 30,
+        p_country         VARCHAR2 DEFAULT NULL
+    )
+    IS
+        l_count_ok    NUMBER := 0;
+        l_count_block NUMBER := 0;
+        l_vendor_id   NUMBER;
+        l_doc_id      NUMBER;
+        l_sql         VARCHAR2(4000);
+        TYPE t_doc_rec IS RECORD (doc_id NUMBER, vendor_id NUMBER);
+        TYPE t_docs    IS TABLE OF t_doc_rec;
+        l_docs t_docs;
+        l_ok   BOOLEAN;
+    BEGIN
+        retcode := '0';
+
+        IF NOT is_txn_validation_enabled THEN
+            errbuf  := 'TXN_VALIDATION_ENABLED is off — sweep skipped (set to Y in QUBITON_CONFIG to activate)';
+            retcode := '1';
+            fnd_output(errbuf);
+            RETURN;
+        END IF;
+
+        -- Pick the source query per module.  Each grabs (doc_id, vendor_id)
+        -- for documents created/updated in the last p_lookback_days.
+        CASE UPPER(p_module)
+            WHEN 'PO' THEN
+                l_sql := 'SELECT po_header_id, vendor_id FROM po_headers_all ' ||
+                         ' WHERE creation_date >= SYSDATE - :1 ' ||
+                         '   AND closed_code IN (''OPEN'',''APPROVED'') ' ||
+                         '   AND vendor_id IS NOT NULL';
+            WHEN 'AP_INVOICE' THEN
+                l_sql := 'SELECT invoice_id, vendor_id FROM ap_invoices_all ' ||
+                         ' WHERE invoice_date >= SYSDATE - :1 ' ||
+                         '   AND payment_status_flag IN (''N'',''P'') ' ||
+                         '   AND vendor_id IS NOT NULL';
+            WHEN 'AP_PAYMENT' THEN
+                l_sql := 'SELECT check_id, vendor_id FROM ap_checks_all ' ||
+                         ' WHERE check_date >= SYSDATE - :1 ' ||
+                         '   AND status_lookup_code IN (''NEGOTIABLE'',''ISSUED'') ' ||
+                         '   AND vendor_id IS NOT NULL';
+            ELSE
+                errbuf  := 'Unknown module: ' || p_module ||
+                           ' (expected PO / AP_INVOICE / AP_PAYMENT)';
+                retcode := '2';
+                RETURN;
+        END CASE;
+
+        BEGIN
+            EXECUTE IMMEDIATE l_sql BULK COLLECT INTO l_docs USING p_lookback_days;
+        EXCEPTION
+            WHEN OTHERS THEN
+                errbuf  := 'Failed to read source table for ' || p_module ||
+                           ': ' || SQLERRM;
+                retcode := '2';
+                fnd_output(errbuf);
+                RETURN;
+        END;
+
+        fnd_output('QubitOn nightly sweep — module=' || p_module ||
+                   ' lookback=' || p_lookback_days || 'd' ||
+                   ' candidates=' || l_docs.COUNT);
+
+        FOR i IN 1..l_docs.COUNT LOOP
+            l_doc_id    := l_docs(i).doc_id;
+            l_vendor_id := l_docs(i).vendor_id;
+
+            -- Route to per-module rules so the sweep honours the same
+            -- on_invalid / on_error policy the inline trigger would.
+            l_ok := validate_ap_supplier(
+                        p_vendor_id    => l_vendor_id,
+                        p_calling_mode => 'CONCURRENT',
+                        p_module_name  => UPPER(p_module));
+
+            IF l_ok THEN
+                l_count_ok := l_count_ok + 1;
+            ELSE
+                l_count_block := l_count_block + 1;
+                fnd_output('  BLOCK  ' || p_module || ' doc=' || l_doc_id ||
+                           ' vendor=' || l_vendor_id);
+            END IF;
+        END LOOP;
+
+        fnd_output('Sweep complete: ' || l_count_ok || ' clean, ' ||
+                   l_count_block || ' flagged');
+
+        IF l_count_block > 0 THEN
+            errbuf  := l_count_block || ' ' || p_module ||
+                       ' document(s) flagged — review the log';
+            retcode := '1';
+        END IF;
+    EXCEPTION
+        WHEN OTHERS THEN
+            errbuf  := 'Unexpected error in sweep: ' || SQLERRM;
+            retcode := '2';
+            fnd_output(errbuf);
+    END run_txn_batch_validation;
 
 END qubiton_ebs_pkg;
 /
