@@ -113,7 +113,18 @@ AS
     ---------------------------------------------------------------------------
 
     -- Master on/off check.  Reads QUBITON_CONFIG.TXN_VALIDATION_ENABLED.
+    -- Result is cached per session for performance — long-running Apps
+    -- Server connections will hold the cached value.  Admins flipping
+    -- TXN_VALIDATION_ENABLED in production should call reset_txn_cache
+    -- afterwards (or bounce the connection pool) to make the change
+    -- effective on already-running sessions.
     FUNCTION is_txn_validation_enabled RETURN BOOLEAN;
+
+    -- Force the next call to is_txn_validation_enabled to re-read
+    -- QUBITON_CONFIG.  Use after toggling TXN_VALIDATION_ENABLED in
+    -- a long-running session, or schedule a small concurrent program
+    -- that calls this for every active session you control.
+    PROCEDURE reset_txn_cache;
 
     -- Validate a PO header on submit (PO_HEADERS_ALL).
     -- Returns FALSE to block the save — caller (typically a BEFORE
