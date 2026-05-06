@@ -803,6 +803,12 @@ AS
         RETURN g_txn_enabled_cached;
     END is_txn_validation_enabled;
 
+    PROCEDURE reset_txn_cache
+    IS
+    BEGIN
+        g_txn_enabled_cached := NULL;
+    END reset_txn_cache;
+
     ---------------------------------------------------------------------------
     -- PO header validation
     ---------------------------------------------------------------------------
@@ -1071,11 +1077,21 @@ AS
 
         -- Pick the source query per module.  Each grabs (doc_id, vendor_id)
         -- for documents created/updated in the last p_lookback_days.
+        --
+        -- Filter notes (verified against EBS R12.x table dictionary):
+        --   PO_HEADERS_ALL.closed_code  ∈ {OPEN, CLOSED, FINALLY CLOSED} —
+        --     'APPROVED' is in authorization_status, not closed_code.
+        --   AP_INVOICES_ALL.payment_status_flag ∈ {Y,N,P,A} —
+        --     N = unpaid, P = partially paid (sweep targets).
+        --   AP_CHECKS_ALL.status_lookup_code ∈ {NEGOTIABLE, VOIDED,
+        --     RECONCILED, STOPPED, OVERFLOW, SET UP} — only NEGOTIABLE
+        --     is "live, not yet cleared".
         CASE UPPER(p_module)
             WHEN 'PO' THEN
                 l_sql := 'SELECT po_header_id, vendor_id FROM po_headers_all ' ||
                          ' WHERE creation_date >= SYSDATE - :1 ' ||
-                         '   AND closed_code IN (''OPEN'',''APPROVED'') ' ||
+                         '   AND closed_code = ''OPEN'' ' ||
+                         '   AND authorization_status IN (''APPROVED'',''IN_PROCESS'',''PRE-APPROVED'') ' ||
                          '   AND vendor_id IS NOT NULL';
             WHEN 'AP_INVOICE' THEN
                 l_sql := 'SELECT invoice_id, vendor_id FROM ap_invoices_all ' ||
@@ -1085,7 +1101,7 @@ AS
             WHEN 'AP_PAYMENT' THEN
                 l_sql := 'SELECT check_id, vendor_id FROM ap_checks_all ' ||
                          ' WHERE check_date >= SYSDATE - :1 ' ||
-                         '   AND status_lookup_code IN (''NEGOTIABLE'',''ISSUED'') ' ||
+                         '   AND status_lookup_code = ''NEGOTIABLE'' ' ||
                          '   AND vendor_id IS NOT NULL';
             ELSE
                 errbuf  := 'Unknown module: ' || p_module ||
