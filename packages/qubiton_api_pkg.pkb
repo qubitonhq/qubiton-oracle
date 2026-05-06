@@ -878,8 +878,8 @@ AS
         require_param(p_company_name, 'p_company_name', 'validate_tax');
 
         lv_body := '{';
-        json_add(lv_body, lv_sep, 'taxNumber',          p_tax_number);
-        json_add(lv_body, lv_sep, 'taxType',            p_tax_type);
+        json_add(lv_body, lv_sep, 'identityNumber',     p_tax_number);
+        json_add(lv_body, lv_sep, 'identityNumberType', p_tax_type);
         json_add(lv_body, lv_sep, 'country',            p_country);
         json_add(lv_body, lv_sep, 'companyName',        p_company_name);
         json_add(lv_body, lv_sep, 'businessEntityType', p_business_entity_type);
@@ -904,9 +904,9 @@ AS
         require_param(p_country, 'p_country', 'validate_tax_format');
 
         lv_body := '{';
-        json_add(lv_body, lv_sep, 'taxNumber', p_tax_number);
-        json_add(lv_body, lv_sep, 'taxType',   p_tax_type);
-        json_add(lv_body, lv_sep, 'country',   p_country);
+        json_add(lv_body, lv_sep, 'identityNumber',     p_tax_number);
+        json_add(lv_body, lv_sep, 'identityNumberType', p_tax_type);
+        json_add(lv_body, lv_sep, 'countryIso2',        p_country);
         lv_body := lv_body || '}';
 
         RETURN http_post('/api/tax/format-validate', lv_body, 'validate_tax_format');
@@ -1051,10 +1051,10 @@ AS
         require_param(p_country, 'p_country', 'lookup_business_registration');
 
         lv_body := '{';
-        json_add(lv_body, lv_sep, 'companyName', p_company_name);
-        json_add(lv_body, lv_sep, 'country',     p_country);
-        json_add(lv_body, lv_sep, 'state',       p_state);
-        json_add(lv_body, lv_sep, 'city',        p_city);
+        json_add(lv_body, lv_sep, 'entityName', p_company_name);
+        json_add(lv_body, lv_sep, 'country',    p_country);
+        json_add(lv_body, lv_sep, 'state',      p_state);
+        json_add(lv_body, lv_sep, 'city',       p_city);
         lv_body := lv_body || '}';
 
         RETURN http_post('/api/businessregistration/lookup', lv_body, 'lookup_business_registration');
@@ -1425,18 +1425,33 @@ AS
     IS
         lv_body VARCHAR2(32767);
         lv_sep  VARCHAR2(1) := '';
+        lv_path VARCHAR2(4000);
+        lv_qs   VARCHAR2(4000);
     BEGIN
         ensure_init;
         require_param(p_company_name, 'p_company_name', 'lookup_esg_score');
         require_param(p_country, 'p_country', 'lookup_esg_score');
 
+        -- country and domain are bound as [FromQuery] on the API controller,
+        -- not body fields. Build them into the URL with safe escaping.
+        IF p_country IS NOT NULL THEN
+            lv_qs := '?country=' || UTL_URL.escape(p_country, escape_reserved_chars => TRUE);
+        END IF;
+        IF p_domain IS NOT NULL THEN
+            IF lv_qs IS NULL THEN
+                lv_qs := '?domain=' || UTL_URL.escape(p_domain, escape_reserved_chars => TRUE);
+            ELSE
+                lv_qs := lv_qs || '&domain=' || UTL_URL.escape(p_domain, escape_reserved_chars => TRUE);
+            END IF;
+        END IF;
+        lv_path := '/api/esg/Scores' || lv_qs;
+
+        -- Body contains only companyName.
         lv_body := '{';
         json_add(lv_body, lv_sep, 'companyName', p_company_name);
-        json_add(lv_body, lv_sep, 'country',     p_country);
-        json_add(lv_body, lv_sep, 'domain',      p_domain);
         lv_body := lv_body || '}';
 
-        RETURN http_post('/api/esg/Scores', lv_body, 'lookup_esg_score');
+        RETURN http_post(lv_path, lv_body, 'lookup_esg_score');
     END lookup_esg_score;
 
     -- POST /api/itsecurity/domainreport
