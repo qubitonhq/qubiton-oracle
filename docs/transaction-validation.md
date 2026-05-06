@@ -157,9 +157,18 @@ END;
 /
 ```
 
-The procedure walks `IBY_PAYMENTS_ALL` for the instruction, screens each payee, and `UPDATE`s the row to `payment_status='HELD'` with `hold_reason='QUBITON_SANCTIONS'` for any match. The standard Payments Manager run skips HELD payments. The batch run completes; sanctioned vendors are simply excluded; AP gets a daily report of who was dropped via the FND log.
+The procedure walks `IBY_PAYMENTS_ALL` for the instruction, screens each payee, and removes any sanctioned payment from the instruction so the bank send skips it. The batch run completes; sanctioned vendors are simply excluded; AP gets a daily report of who was dropped via the FND log.
 
-Wire this into your Payments Manager workflow either via the standard "Validate" action customisation or as a pre-step in your scheduled run.
+**Removal path** — the private helper `remove_payment_from_instruction` tries the supported public API first, then falls back to a direct UPDATE only when the API is genuinely unavailable:
+
+| Path | When | Effect |
+|---|---|---|
+| **A — `IBY_DISBURSE_UI_API_PUB_PKG.remove_payment(p_pmt_id, 'REMOVED', x_status)`** | `APPS.IBY_DISBURSE_UI_API_PUB_PKG` is in the schema and the calling user has `EXECUTE` on it (the standard EBS pattern). | Flips `payment_status='REMOVED'`, cascades each linked `IBY_DOCS_PAYABLE_ALL` row to `'REMOVED_PAYMENT_REMOVED'`, AND fires `AP_PMT_CALLOUT_PKG.documents_payable_rejected` so AP unreserves the underlying invoice. This is the entry point the "Pending Proposed Payments Review" Fiori/Forms UI uses (see Oracle MOS 2231763.1). |
+| **B — direct UPDATE on `iby_payments_all`** (fallback) | The IBY package isn't present — non-EBS clones, restricted dev tenants, schema-stub installs without `GRANT EXECUTE`. | Sets `payment_status='REMOVED_FROM_PROCESSING'` plus WHO columns. Bank send still skips the row, but the AP cascade is missed — the linked invoice stays in "scheduled for payment" until AP intervenes. |
+
+The fallback exists so the package **compiles** outside EBS (CI fixtures, dev sandboxes), not as a recommended runtime path. In production grant the calling schema `EXECUTE` on `APPS.IBY_DISBURSE_UI_API_PUB_PKG` so Path A is always taken — the FND log records which path each removal used (`REMOVED via IBY_API` vs `REMOVED via DIRECT_UPDATE`).
+
+Wire this procedure into your Payments Manager workflow either via the standard "Validate" action customisation or as a pre-step in your scheduled run.
 
 ## Best-practice fail-mode policy
 
@@ -187,7 +196,7 @@ For warning-tier validations (tax mismatch, address change, beneficial-owner cha
 
 - **PO**: write a Z-flag onto the PO header (e.g., `attribute15`) when validation produces a warning verdict; PO Approval Hierarchy reads the flag and routes to a higher-tier approver
 - **AP invoice**: place a `QUBITON_RISK` invoice hold via `AP_HOLDS_ALL`; AP Holds workflow routes the invoice to the right approver
-- **AP payment**: hold via `payment_status='HELD'` (same mechanism as the batch screening)
+- **AP payment**: route through `IBY_DISBURSE_UI_API_PUB_PKG.remove_payment` (same mechanism as the batch screening — see the path table above)
 
 This is the right pattern for "scary but not deal-breaking" signals. It keeps the connector out of the procurement-policy debate.
 

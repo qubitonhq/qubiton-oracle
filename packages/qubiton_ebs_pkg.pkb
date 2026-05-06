@@ -1002,6 +1002,143 @@ AS
     END validate_ap_payment;
 
     ---------------------------------------------------------------------------
+    -- remove_payment_from_instruction (private)
+    --
+    -- Take a single payment out of a payment instruction so the bank
+    -- send skips it.  Tries the supported IBY public API first; falls
+    -- back to a minimal direct UPDATE if the API is unavailable.
+    --
+    -- Path A (preferred) — IBY_DISBURSE_UI_API_PUB_PKG.remove_payment.
+    --   Documented in Oracle MOS 2231763.1 as the entry point the
+    --   "Pending Proposed Payments Review" UI uses to remove a
+    --   proposed payment from a PPR.  The API:
+    --     * Flips iby_payments_all.payment_status to 'REMOVED'.
+    --     * Cascades each linked iby_docs_payable_all row to
+    --       'REMOVED_PAYMENT_REMOVED'.
+    --     * Fires AP_PMT_CALLOUT_PKG.documents_payable_rejected so
+    --       AP unreserves the underlying invoice.
+    --   Direct UPDATEs bypass the cascade and the callout — leaving
+    --   the AP invoice in a stranded "scheduled for payment" state.
+    --   Always prefer the API.
+    --
+    -- Path B (fallback) — direct UPDATE on iby_payments_all.
+    --   Used when the IBY package is not in the schema (non-EBS
+    --   sandbox, restricted dev tenant, schema without GRANT EXECUTE
+    --   on APPS.IBY_DISBURSE_UI_API_PUB_PKG).  Sets payment_status
+    --   to the documented value 'REMOVED_FROM_PROCESSING' plus the
+    --   WHO columns.  Loses the cascade — customer's AP team needs
+    --   to manually unreserve via Front-End or the docs-payable API.
+    --
+    -- Wrapping in dynamic anonymous blocks keeps qubiton_ebs_pkg
+    -- compilable in environments where neither path's tables/packages
+    -- exist (CI fixture databases, schema-stub installs).
+    --
+    -- Sources:
+    --   eTRM 12.1.1 / 12.2.2 — IBY_DISBURSE_UI_API_PUB_PKG body
+    --   MOS 2231763.1 — remove_payment usage from the proposed-pmt UI
+    ---------------------------------------------------------------------------
+    PROCEDURE remove_payment_from_instruction (
+        p_payment_id IN  NUMBER,
+        x_method     OUT VARCHAR2,
+        x_success    OUT BOOLEAN
+    )
+    IS
+        l_api_status VARCHAR2(1)    := NULL;
+        l_api_block  VARCHAR2(2000);
+        l_api_error  VARCHAR2(2000);
+    BEGIN
+        -- Path A: supported public API.  After the call, on a
+        -- non-success status, drain FND_MSG_PUB.Get inside the
+        -- block so we surface the actual error reason in the FND
+        -- log instead of just the cryptic 'E' / 'U' status code.
+        -- The remove_payment / remove_payments / stop_payment APIs
+        -- don't expose x_msg_count / x_msg_data, so we read the
+        -- stack ourselves (per the FND_API contract — caller
+        -- responsibility on those three procedures).
+        l_api_block :=
+            'DECLARE                                                    ' ||
+            '   l_status VARCHAR2(1);                                   ' ||
+            '   l_count  NUMBER;                                        ' ||
+            '   l_msg    VARCHAR2(2000);                                ' ||
+            '   l_concat VARCHAR2(2000);                                ' ||
+            ' BEGIN                                                     ' ||
+            '   FND_MSG_PUB.Initialize;                                 ' ||
+            '   APPS.IBY_DISBURSE_UI_API_PUB_PKG.remove_payment(        ' ||
+            '     p_pmt_id        => :pmt_id,                           ' ||
+            '     p_pmt_status    => ''REMOVED'',                       ' ||
+            '     x_return_status => l_status );                        ' ||
+            '   IF l_status <> ''S'' THEN                               ' ||
+            '     l_count := FND_MSG_PUB.Count_Msg;                     ' ||
+            '     FOR i IN 1 .. LEAST(l_count, 5) LOOP                  ' ||
+            '       l_msg := FND_MSG_PUB.Get(p_msg_index => i,          ' ||
+            '                                p_encoded   => ''F'');     ' ||
+            '       l_concat := SUBSTR(l_concat || ''[ '' || l_msg ||   ' ||
+            '                          '' ]'', 1, 2000);                ' ||
+            '     END LOOP;                                             ' ||
+            '     FND_MSG_PUB.Delete_Msg;                               ' ||
+            '   END IF;                                                 ' ||
+            '   :ret := l_status;                                       ' ||
+            '   :err := l_concat;                                       ' ||
+            ' END;';
+        BEGIN
+            EXECUTE IMMEDIATE l_api_block
+                USING IN  p_payment_id,
+                      OUT l_api_status,
+                      OUT l_api_error;
+        EXCEPTION
+            WHEN OTHERS THEN
+                -- Package not present, no GRANT EXECUTE, or unexpected
+                -- runtime failure — fall through to Path B.
+                l_api_status := NULL;
+                fnd_log('remove_payment_from_instruction: IBY public API ' ||
+                        'unavailable for payment ' || p_payment_id ||
+                        ' - ' || SQLERRM || ' (falling back to direct UPDATE)');
+        END;
+
+        IF l_api_status = 'S' THEN
+            x_method  := 'IBY_API';
+            x_success := TRUE;
+            RETURN;
+        ELSIF l_api_status IS NOT NULL THEN
+            -- API was reachable but returned a non-success status
+            -- (E = error, U = unexpected error).  Don't fall back to
+            -- the direct UPDATE — the API can fail for legitimate
+            -- reasons (payment already remitted, instruction locked)
+            -- where bypassing it would just mask the issue.  Surface
+            -- the FND_MSG_PUB messages so operators can act.
+            fnd_log('remove_payment_from_instruction: IBY public API ' ||
+                    'returned status ''' || l_api_status ||
+                    ''' for payment ' || p_payment_id ||
+                    ' — FND messages: ' ||
+                    NVL(l_api_error, '<none on stack>'));
+            x_method  := 'IBY_API';
+            x_success := FALSE;
+            RETURN;
+        END IF;
+
+        -- Path B: direct UPDATE fallback (API not present).
+        BEGIN
+            EXECUTE IMMEDIATE
+                'UPDATE iby_payments_all ' ||
+                '   SET payment_status    = ''REMOVED_FROM_PROCESSING'', ' ||
+                '       last_update_date  = SYSDATE, ' ||
+                '       last_updated_by   = NVL(FND_GLOBAL.USER_ID, -1), ' ||
+                '       last_update_login = NVL(FND_GLOBAL.LOGIN_ID, -1) ' ||
+                ' WHERE payment_id        = :1'
+                USING p_payment_id;
+            x_method  := 'DIRECT_UPDATE';
+            x_success := TRUE;
+        EXCEPTION
+            WHEN OTHERS THEN
+                fnd_log('remove_payment_from_instruction: direct UPDATE ' ||
+                        'failed for payment ' || p_payment_id ||
+                        ' - ' || SQLERRM);
+                x_method  := 'NONE';
+                x_success := FALSE;
+        END;
+    END remove_payment_from_instruction;
+
+    ---------------------------------------------------------------------------
     -- Payment-batch screening (filter, do NOT abort the run)
     ---------------------------------------------------------------------------
     PROCEDURE screen_payment_batch (
@@ -1047,54 +1184,40 @@ AS
                         p_module_name  => 'AP_PAY_BATCH');
 
             IF NOT l_ok THEN
-                -- Take the payment out of the instruction so the bank
-                -- send skips it.  Notes on the column set:
-                --
-                --   * IBY_PAYMENTS_ALL.payment_status is controlled by
-                --     lookup IBY_PAYMENT_STATUSES.  Per Oracle eTRM
-                --     12.2.2 the documented values include
-                --     CREATED / FORMATTED / TRANSMITTED and the
-                --     PPR-lifecycle values REMOVED_FROM_PROCESSING /
-                --     REMOVED_INSTRUCTION_TERMINATED.  'HELD' is NOT
-                --     a documented value; the prior PR set it and
-                --     would have failed the FK to iby_lookups.
-                --
-                --   * 'hold_reason', 'removed_from_instr_flag',
-                --     'removed_reason_code', 'removed_reason_text' do
-                --     NOT exist on iby_payments_all (verified against
-                --     eTRM 12.2.2 / Cloud EDM 25b).  Only set columns
-                --     that exist on the table.
-                --
-                --   * The canonical, supported way to terminate a
-                --     payment in an instruction is to call
-                --     IBY_DISBURSE_UI_API_PUB_PKG.terminate_payments
-                --     (the public API).  If your customisation has
-                --     a wrapper around it, prefer that over a direct
-                --     UPDATE.  The direct UPDATE here is a minimal-
-                --     dependency fallback that flips the lifecycle
-                --     status only — your AP team needs the reason in
-                --     a Z-table or the FND log to investigate.
+                -- Take the payment out of the instruction.  The
+                -- private helper tries the supported public API
+                -- (IBY_DISBURSE_UI_API_PUB_PKG.remove_payment, which
+                -- cascades to the AP docs-payable layer + fires the
+                -- AP rejection callout), then falls back to a direct
+                -- UPDATE only when the API is genuinely unavailable.
+                DECLARE
+                    l_method  VARCHAR2(20);
+                    l_removed BOOLEAN;
                 BEGIN
-                    EXECUTE IMMEDIATE
-                        'UPDATE iby_payments_all ' ||
-                        '   SET payment_status    = ''REMOVED_FROM_PROCESSING'', ' ||
-                        '       last_update_date  = SYSDATE, ' ||
-                        '       last_updated_by   = NVL(FND_GLOBAL.USER_ID, -1), ' ||
-                        '       last_update_login = NVL(FND_GLOBAL.LOGIN_ID, -1) ' ||
-                        ' WHERE payment_id        = :1'
-                        USING l_pmts(i).payment_id;
-                    l_filtered := l_filtered + 1;
-                    -- Reason captured in the FND concurrent-program
-                    -- log (and in qubiton_api_log for the API call
-                    -- itself).  Customers wanting structured AP-
-                    -- visible audit add an INSERT into a Z-table here.
-                    fnd_log('screen_payment_batch: REMOVED_FROM_PROCESSING payment ' ||
-                            l_pmts(i).payment_id || ' (vendor ' ||
-                            l_pmts(i).vendor_id || ' — sanctioned, reason: QUBITON_SANCTIONS)');
-                EXCEPTION
-                    WHEN OTHERS THEN
-                        fnd_log('screen_payment_batch: failed to remove payment ' ||
-                                l_pmts(i).payment_id || ' - ' || SQLERRM);
+                    remove_payment_from_instruction(
+                        p_payment_id => l_pmts(i).payment_id,
+                        x_method     => l_method,
+                        x_success    => l_removed);
+
+                    IF l_removed THEN
+                        l_filtered := l_filtered + 1;
+                        fnd_log('screen_payment_batch: REMOVED via ' || l_method ||
+                                ' — payment ' || l_pmts(i).payment_id ||
+                                ' (vendor ' || l_pmts(i).vendor_id ||
+                                ', reason: QUBITON_SANCTIONS)');
+                    ELSE
+                        -- Removal failed.  Don't pretend the bank send
+                        -- will skip it — log loudly so AP can take
+                        -- manual action.  The validation result is
+                        -- still in qubiton_api_log for the API call
+                        -- the sanctions check itself produced.
+                        fnd_log('screen_payment_batch: COULD NOT remove ' ||
+                                'sanctioned payment ' || l_pmts(i).payment_id ||
+                                ' (vendor ' || l_pmts(i).vendor_id ||
+                                ', method=' || l_method ||
+                                ') — payment will reach the bank send unless ' ||
+                                'AP intervenes manually');
+                    END IF;
                 END;
             END IF;
         END LOOP;
